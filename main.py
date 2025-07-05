@@ -10,7 +10,8 @@ import hmac
 import hashlib
 import stripe
 import re # Importar para validación de email
-
+from dotenv import load_dotenv
+load_dotenv()
 ## ===============================
 ## BOT DE DISCORD + WEBHOOK FASTAPI
 ## CONTROL DE ROLES PREMIUM POR STRIPE
@@ -239,7 +240,8 @@ async def check_subscriptions():
 
     try:
         # Solo trae los que tienen un discord_user_id asignado para procesar roles
-        response = supabase.table(TABLE_NAME).select("discord_user_id, subscription_status").not("discord_user_id", "is", None).execute()
+        response = supabase.table(TABLE_NAME).select("discord_user_id, subscription_status").neq("discord_user_id", None).execute()
+
         
         for user_data in response.data:
             discord_user_id = user_data.get("discord_user_id")
