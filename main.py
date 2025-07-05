@@ -154,73 +154,96 @@ async def on_ready():
 
 
 ## ============ Comando '!vincular' por DM ============
+# ============ Comando '!vincular' por DM ============
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
 
     if isinstance(message.channel, discord.DMChannel):
-        if message.content.lower().startswith("!vincular"): # Usar .lower() para ser más flexible
+        if message.content.lower().startswith("!link"):
             parts = message.content.split()
             if len(parts) != 2:
-                await message.channel.send("❌ Usa el comando correctamente:\n`!vincular tuemail@correo.com`")
+                await message.channel.send("❌ Use the command correctly:\n`!link youremail@example.com`")
                 return
 
-            user_email = parts[1].lower() # Convertir a minúsculas para consistencia
+            user_email = parts[1].lower()
 
             # Validar formato del email
             if not re.match(r"[^@]+@[^@]+\.[^@]+", user_email):
-                await message.channel.send("❌ El formato del correo electrónico no es válido. Por favor, asegúrate de escribirlo correctamente.")
+                await message.channel.send("❌ The email format is invalid. Please make sure you type it correctly.")
+
                 return
-            
-            # Verificar si el usuario ya está vinculado
-            existing_link = supabase.table(TABLE_NAME).select("discord_user_id").eq("discord_user_id", str(message.author.id)).single().execute()
-            if existing_link.data and existing_link.data["discord_user_id"] == str(message.author.id):
-                await message.channel.send("ℹ️ Parece que tu cuenta de Discord ya está vinculada con una suscripción. Si crees que hay un error, contacta al soporte.")
+
+            # --- PRIMERA MODIFICACIÓN (para el error actual) ---
+            # Verificar si el usuario de Discord ya está vinculado en la base de datos
+            existing_link_data = None
+            try:
+                # Intenta buscar un registro con el discord_user_id
+                response = supabase.table(TABLE_NAME).select("discord_user_id").eq("discord_user_id", str(message.author.id)).single().execute()
+                existing_link_data = response.data
+            except Exception as e:
+                # Si no se encuentra (o cualquier otro error), existing_link_data seguirá siendo None
+                # print(f"Debug: No existing link found for Discord user {message.author.id} or other error: {e}")
+                pass # Esto es lo esperado si el usuario aún no está vinculado
+
+            if existing_link_data: # Si existing_link_data no es None, significa que ya está vinculado
+                await message.channel.send("ℹ️ It seems your Discord account is already linked to a subscription. If you believe this is an error, please contact support.")
+
                 return
+            # --- FIN PRIMERA MODIFICACIÓN ---
 
 
             try:
                 # Buscar cliente en Stripe por email
                 customers = stripe.Customer.list(email=user_email, limit=1)
                 if not customers.data:
-                    await message.channel.send("❌ No se encontró un cliente con ese correo en Stripe. Verifica que sea **el mismo** que usaste al pagar.")
+                    await message.channel.send("❌ No customer with that email was found in Stripe. Please verify it is the **same** email you used when paying.")
+
                     return
 
                 customer_id = customers.data[0].id
-                
+
                 # Buscar la suscripción activa del cliente en Stripe
                 subscriptions = stripe.Subscription.list(customer=customer_id, status='active', limit=1)
                 if not subscriptions.data:
-                    # El cliente existe, pero no tiene suscripción activa
-                    await message.channel.send("⚠️ Se encontró tu correo en Stripe, pero no tienes una suscripción activa. Si acabas de pagar, espera unos minutos o contacta al soporte.")
+                    await message.channel.send("⚠️ Your email was found in Stripe, but there is no active subscription. If you just paid, please wait a few minutes or contact support.")
+
                     print(f"User {message.author} tried to link with email {user_email} but no active subscription found for customer {customer_id}.")
                     return
 
-                # Actualizar o insertar en Supabase
-                # Verificar si ya existe un registro con ese stripe_customer_id
-                response = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).execute()
-                if response.data:
-                    # Si ya existe, actualiza el discord_user_id
+                # --- SEGUNDA MODIFICACIÓN (similar a la primera, para stripe_customer_id) ---
+                # Verificar si ya existe un registro con ese stripe_customer_id en la base de datos
+                existing_stripe_link_data = None
+                try:
+                    response = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).single().execute()
+                    existing_stripe_link_data = response.data
+                except Exception as e:
+                    # Si no se encuentra, existing_stripe_link_data seguirá siendo None
+                    # print(f"Debug: No existing Stripe link found for customer {customer_id} or other error: {e}")
+                    pass # Esto es lo esperado si la suscripción de Stripe aún no se ha vinculado a un Discord ID
+
+                if existing_stripe_link_data:
+                    # Si ya existe, actualiza el discord_user_id (para vincularlo)
                     supabase.table(TABLE_NAME).update(
-                        {"discord_user_id": str(message.author.id), "subscription_status": subscriptions.data[0].status} # Actualiza también el status por si acaso
+                        {"discord_user_id": str(message.author.id), "subscription_status": subscriptions.data[0].status}
                     ).eq("stripe_customer_id", customer_id).execute()
                 else:
-                    # Si no existe, crea un nuevo registro
+                    # Si no existe, crea un nuevo registro con ambos IDs
                     supabase.table(TABLE_NAME).insert(
                         {"stripe_customer_id": customer_id, "discord_user_id": str(message.author.id), "subscription_status": subscriptions.data[0].status}
                     ).execute()
+                # --- FIN SEGUNDA MODIFICACIÓN ---
 
+                await message.channel.send("✅ Your Discord account has been successfully linked to your subscription. **Your premium access will be activated soon.**")
 
-                await message.channel.send("✅ Tu cuenta de Discord ha sido vinculada correctamente con tu suscripción. **Tu acceso premium se activará pronto.**")
                 print(f"✅ Vinculado {message.author} ({message.author.id}) con Stripe Customer ID: {customer_id}")
                 if admin_log_channel:
                     await admin_log_channel.send(f"🟢 **Nuevo vínculo:** {message.author.mention} (`{message.author.id}`) ha vinculado su cuenta con Stripe Customer ID: `{customer_id}` (Email: `{user_email}`).")
 
-
             except Exception as e:
                 print(f"Error vinculando para {message.author} ({user_email}): {e}")
-                await message.channel.send("❌ Ocurrió un error al intentar vincular tu cuenta. Por favor, asegúrate de que el correo es el correcto y, si persiste el problema, contacta al soporte.")
+                await message.channel.send("❌ An error occurred while trying to link your account. Please ensure your email is correct, and if the problem persists, contact support.")
                 if admin_log_channel:
                     await admin_log_channel.send(f"🔴 **Error de vínculo:** {message.author.mention} (`{message.author.id}`) intentó vincular su cuenta con email `{user_email}` pero ocurrió un error: `{e}`")
 
