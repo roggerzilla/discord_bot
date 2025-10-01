@@ -43,7 +43,7 @@ TABLE_NAME = "subscriptions_discord"
 ## ====================
 app = FastAPI()
 
-@app.post("/stripe-webhook")
+@app.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
     payload = await request.body()
     sig_header = request.headers.get('stripe-signature')
