@@ -31,7 +31,7 @@ STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 DISCORD_GUILD_ID = int(os.environ.get("DISCORD_GUILD_ID"))
 DISCORD_ROLE_ID = int(os.environ.get("DISCORD_ROLE_ID"))
-ADMIN_LOG_CHANNEL_ID = int(os.environ.get("ADMIN_LOG_CHANNEL_ID")) 
+ADMIN_LOG_CHANNEL_ID = int(os.environ.get("ADMIN_LOG_CHANNEL_ID"))
 
 stripe.api_key = STRIPE_SECRET_KEY
 
