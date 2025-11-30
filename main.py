@@ -11,7 +11,7 @@ import hashlib
 import stripe
 import re
 from dotenv import load_dotenv
-import asyncio # Necesario para las pausas y evitar Rate Limit
+import asyncio
 import threading
 
 load_dotenv()
@@ -53,24 +53,20 @@ def get_customer_aggregated_status(customer_id: str):
     Si no, devuelve el estado de la más reciente (ej. "canceled", "past_due").
     """
     try:
-        # CORRECCIÓN CLAVE: Eliminar limit=1 y pedir 'all'
         subscriptions = stripe.Subscription.list(customer=customer_id, status='all', limit=20) 
 
         if not subscriptions.data:
-            return "canceled" # Si no tiene suscripciones, está cancelado
+            return "canceled"
 
-        # Buscar si CUALQUIER suscripción está activa
         for sub in subscriptions.data:
             if sub.status in ACTIVE_STATUSES:
-                return sub.status # ¡Encontramos una activa! Tiene acceso.
+                return sub.status
 
-        # Si el bucle termina, es que NINGUNA está activa.
-        # Devolvemos el estado de la más reciente (la primera en la lista).
         return subscriptions.data[0].status
         
     except Exception as e:
         print(f"🚨 Error en get_customer_aggregated_status para {customer_id}: {e}")
-        return None # Devolver None para indicar un error
+        return None
 
 ## ====================
 ## FASTAPI APP PARA WEBHOOK STRIPE
@@ -97,7 +93,6 @@ async def stripe_webhook(request: Request):
     data_object = event["data"]["object"]
     customer_id = data_object.get("customer")
 
-    # Determinar customer_id
     if not customer_id and "customer" in data_object:
         customer_id = data_object["customer"]
     elif not customer_id and event_type.startswith("customer."):
@@ -109,25 +104,19 @@ async def stripe_webhook(request: Request):
 
     print(f"Received Stripe event: {event_type} for customer {customer_id}")
 
-    # Manejo de eventos de suscripción (updated, created, deleted)
     if event_type in ["customer.subscription.updated", "customer.subscription.created", "customer.subscription.deleted"]:
         
-        # <--- CORRECCIÓN CLAVE: Usar la nueva función helper
-        # No confiamos en data_object.get("status"), recalculamos el estado general
         final_status = get_customer_aggregated_status(customer_id)
 
         if final_status is None:
-            # Error en la función helper (ya habrá impreso el error)
             raise HTTPException(status_code=500, detail="Error retrieving aggregated status from Stripe.")
 
         print(f"Webhook {event_type}. Customer {customer_id}. Aggregated status is: {final_status}")
 
         try:
-            # Buscar el registro existente por stripe_customer_id
             response = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).execute()
             
             if response.data:
-                # Actualizar registro existente con el estado AGREGADO
                 print(f"Updating existing subscription for customer {customer_id} to aggregated status {final_status}")
                 supabase.table(TABLE_NAME).update({
                     "subscription_status": final_status, 
@@ -135,7 +124,6 @@ async def stripe_webhook(request: Request):
                 }).eq("stripe_customer_id", customer_id).execute()
             
             else:
-                # Crear nuevo registro si no existe (puede ser sin discord_user_id)
                 print(f"Creating new subscription record for customer {customer_id} with aggregated status {final_status}")
                 supabase.table(TABLE_NAME).insert({
                     "stripe_customer_id": customer_id, 
@@ -149,14 +137,10 @@ async def stripe_webhook(request: Request):
             print(f"🚨 Supabase Error during subscription webhook processing for {customer_id}: {e}")
             raise HTTPException(status_code=500, detail=f"Supabase processing error: {e}")
 
-    # Manejo de checkout.session.completed (para vincular nuevos clientes rápidamente)
     elif event_type == "checkout.session.completed":
         session = event["data"]["object"]
         customer_id = session.get("customer")
         subscription_id = session.get("subscription")
-
-        # ... (La lógica de checkout session se mantiene igual) ...
-        # ...
 
     return JSONResponse(status_code=200, content={"message": "Event ignored or handled by specific logic."})
 
@@ -189,7 +173,7 @@ async def on_ready():
         check_subscriptions.start()
 
 
-## ============ Comando '!link' por DM ============
+## ============ Comando '!link' por DM (CORREGIDO PARA RE-VINCULACIÓN) ============
 @client.event
 async def on_message(message):
     if message.author == client.user:
@@ -208,15 +192,6 @@ async def on_message(message):
                 await message.channel.send("❌ The email format is invalid. Please make sure you type it correctly.")
                 return
 
-            # Verificar si el usuario de Discord ya está vinculado
-            try:
-                response = supabase.table(TABLE_NAME).select("discord_user_id").eq("discord_user_id", str(message.author.id)).single().execute()
-                if response.data:
-                    await message.channel.send("ℹ️ It seems your Discord account is already linked to a subscription. If you believe this is an error, please contact support.")
-                    return
-            except Exception:
-                pass 
-
             try:
                 # Buscar cliente en Stripe por email
                 customers = stripe.Customer.list(email=user_email, limit=1)
@@ -226,7 +201,7 @@ async def on_message(message):
 
                 customer_id = customers.data[0].id
 
-                # <--- CORRECCIÓN CLAVE: Usar la nueva función helper
+                # Verificar estado de la suscripción en Stripe
                 stripe_status = get_customer_aggregated_status(customer_id)
 
                 if stripe_status not in ACTIVE_STATUSES:
@@ -234,27 +209,54 @@ async def on_message(message):
                     print(f"User {message.author} tried to link with email {user_email} but no active subscription found for customer {customer_id}.")
                     return
                 
-                # Verificar y actualizar/crear registro en Supabase con ambos IDs
+                # 🔑 CORRECCIÓN PRINCIPAL: Verificar si YA existe un vínculo con OTRO usuario de Discord
                 response = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).execute()
 
                 update_data = {
                     "discord_user_id": str(message.author.id), 
-                    "subscription_status": stripe_status, # Usamos el estado agregado
+                    "subscription_status": stripe_status,
                     "updated_at": discord.utils.utcnow().isoformat()
                 }
 
                 if response.data:
+                    # Ya existe un registro para este customer_id
+                    existing_discord_id = response.data[0].get("discord_user_id")
+                    
+                    # Si el discord_user_id existente es diferente al actual, alertamos
+                    if existing_discord_id and existing_discord_id != str(message.author.id):
+                        print(f"⚠️ Customer {customer_id} ya está vinculado a Discord ID {existing_discord_id}, pero {message.author.id} intenta vincularse.")
+                        await message.channel.send(
+                            "⚠️ This subscription is already linked to another Discord account. "
+                            "If you need to transfer it, please contact support."
+                        )
+                        if admin_log_channel:
+                            await admin_log_channel.send(
+                                f"🟡 **Intento de re-vinculación:** {message.author.mention} (`{message.author.id}`) "
+                                f"intentó vincular Stripe Customer `{customer_id}` que ya está vinculado a Discord ID `{existing_discord_id}`."
+                            )
+                        return
+                    
+                    # Si es el mismo usuario o no había discord_id, actualizamos
                     supabase.table(TABLE_NAME).update(update_data).eq("stripe_customer_id", customer_id).execute()
+                    action_msg = "re-vinculado" if existing_discord_id else "vinculado"
+                    print(f"✅ {action_msg.capitalize()} {message.author} ({message.author.id}) con Stripe Customer ID: {customer_id}")
+                    
                 else:
+                    # No existe registro, creamos uno nuevo
                     insert_data = {"stripe_customer_id": customer_id}
                     insert_data.update(update_data)
                     supabase.table(TABLE_NAME).insert(insert_data).execute()
+                    action_msg = "vinculado"
+                    print(f"✅ Vinculado {message.author} ({message.author.id}) con Stripe Customer ID: {customer_id}")
 
                 await message.channel.send("✅ Your Discord account has been successfully linked to your subscription. **Your premium access will be activated soon.**")
-
-                print(f"✅ Vinculado {message.author} ({message.author.id}) con Stripe Customer ID: {customer_id}")
+                
                 if admin_log_channel:
-                    await admin_log_channel.send(f"🟢 **Nuevo vínculo:** {message.author.mention} (`{message.author.id}`) ha vinculado su cuenta con Stripe Customer ID: `{customer_id}` (Email: `{user_email}`).")
+                    await admin_log_channel.send(
+                        f"🟢 **Vínculo exitoso:** {message.author.mention} (`{message.author.id}`) "
+                        f"ha {'re-' if response.data and response.data[0].get('discord_user_id') else ''}vinculado su cuenta "
+                        f"con Stripe Customer ID: `{customer_id}` (Email: `{user_email}`)."
+                    )
 
             except Exception as e:
                 print(f"Error vinculando para {message.author} ({user_email}): {e}")
@@ -265,7 +267,7 @@ async def on_message(message):
     else:
         return
 
-## ============ Asignación automática de roles (CON CORRECCIÓN DE RATE LIMIT) ============
+## ============ Asignación automática de roles ============
 @tasks.loop(minutes=10)
 async def check_subscriptions():
     print("🔄 Checking subscriptions...")
@@ -283,7 +285,7 @@ async def check_subscriptions():
         
         for user_data in response.data:
             discord_user_id = user_data.get("discord_user_id")
-            db_status = user_data.get("subscription_status") # El estado según nuestra BDD
+            db_status = user_data.get("subscription_status")
             customer_id = user_data.get("stripe_customer_id")
 
             if not discord_user_id or not customer_id:
@@ -295,13 +297,10 @@ async def check_subscriptions():
                 print(f"ℹ️ User {discord_user_id} not found in guild. Skipping.")
                 continue
 
-            # <--- CORRECCIÓN CLAVE: Reemplazamos la "Doble Verificación"
-            
             # Siempre consultamos a Stripe cuál es el estado real agregado
             final_status = get_customer_aggregated_status(customer_id)
             
             if final_status is None:
-                # Error en la API de Stripe, saltamos a este usuario para no quitarle el rol por error
                 print(f"⚠️ Error checking Stripe for {customer_id}. Skipping user {discord_user_id}.")
                 continue
 
@@ -313,7 +312,7 @@ async def check_subscriptions():
                     "updated_at": discord.utils.utcnow().isoformat()
                 }).eq("stripe_customer_id", customer_id).execute()
 
-            # ---------------- Lógica de Rol Final (Basada en final_status) ----------------
+            # Lógica de Rol Final
             if final_status in ACTIVE_STATUSES:
                 if role not in member.roles:
                     await member.add_roles(role, reason=f"Subscription active/trialing ({final_status})")
@@ -324,7 +323,7 @@ async def check_subscriptions():
                         except Exception as log_e:
                             print(f"Error sending admin log (add role): {log_e}")
             
-            else: # El estado final NO es activo
+            else:
                 if role in member.roles:
                     await member.remove_roles(role, reason=f"Subscription inactive or canceled (Status: {final_status})")
                     print(f"❌ Removed role '{role.name}' from {member.display_name} - Status: {final_status}")
@@ -334,7 +333,6 @@ async def check_subscriptions():
                         except Exception as log_e:
                             print(f"Error sending admin log (remove role): {log_e}")
                             
-            # 🔑 CORRECCIÓN CLAVE: Pausa obligatoria para evitar Rate Limit
             await asyncio.sleep(0.5) 
             
     except Exception as e:
@@ -351,11 +349,8 @@ async def check_subscriptions():
 if __name__ == "__main__":
 
     def start_fastapi():
-        # Aseguramos que la IP y el puerto sean correctos para Render
         uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
 
-    # Start FastAPI in a separate thread
     threading.Thread(target=start_fastapi).start()
     
-    # Run the Discord bot
     client.run(DISCORD_BOT_TOKEN)
