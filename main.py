@@ -5,7 +5,6 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from supabase import create_client, Client
 import uvicorn
-import json
 import hmac
 import hashlib
 import stripe
@@ -13,25 +12,72 @@ import re
 from dotenv import load_dotenv
 import asyncio
 import threading
+import time
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 load_dotenv()
 
 ## ===============================
-## BOT DE DISCORD + WEBHOOK FASTAPI
-## CONTROL DE ROLES PREMIUM POR STRIPE
+## BOT COMBINADO: TELEGRAM + DISCORD
 ## ===============================
 
 ## ====================
-## CONFIGURACIÓN
+## CONFIGURACIÓN TELEGRAM
+## ====================
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', 'TU_TOKEN_AQUI')
+CHANNEL_ID = os.environ.get('CHANNEL_ID', '-1002620828537') 
+CHANNEL_LINK = os.environ.get('CHANNEL_LINK', 'https://t.me/monkey_videos')
+TELEGRAM_ADMIN_ID = int(os.environ.get('TELEGRAM_ADMIN_ID', '0'))
+
+telegram_links = {
+    "1": os.environ.get('LINK_BOT1', 'https://t.me/bot1'),
+    "2": os.environ.get('LINK_BOT2', 'https://t.me/bot2'),
+    "3": os.environ.get('LINK_BOT3', 'https://t.me/bot3')
+}
+
+WHATS_NEW_TEXT = """
+📢 **WEEKLY UPDATES & NEWS** 🚀
+
+Here is what we have improved for you:
+
+🤖 **Bot 2 (Img to Video):**
+• Added new:
+• Cowgirl
+• Cowgirl big tts
+
+🤖 **Bot 3 (Video to Video):**
+• bg tts
+
+✨ _Stay tuned to our channel for more updates!_
+"""
+
+GALLERY_TEXT = """
+🤖 Our Bots and Exclusive Galleries ✨
+
+🖼 Image to Video (Option 1)
+Gallery: https://postimg.cc/gallery/Kx5KSSs
+
+🖼 Image to Video (Option 2)
+Gallery: https://postimg.cc/gallery/z3W9JnW
+
+📹 Video to Video
+Gallery: https://postimg.cc/0K6R05tS
+
+Enjoy! 🔥
+"""
+
+## ====================
+## CONFIGURACIÓN DISCORD + STRIPE
 ## ====================
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-DISCORD_GUILD_ID = int(os.environ.get("DISCORD_GUILD_ID"))
-DISCORD_ROLE_ID = int(os.environ.get("DISCORD_ROLE_ID"))
-ADMIN_LOG_CHANNEL_ID = int(os.environ.get("ADMIN_LOG_CHANNEL_ID"))
+DISCORD_GUILD_ID = int(os.environ.get("DISCORD_GUILD_ID", "0"))
+DISCORD_ROLE_ID = int(os.environ.get("DISCORD_ROLE_ID", "0"))
+ADMIN_LOG_CHANNEL_ID = int(os.environ.get("ADMIN_LOG_CHANNEL_ID", "0"))
 
 stripe.api_key = STRIPE_SECRET_KEY
 ACTIVE_STATUSES = ["active", "trialing"]
@@ -45,32 +91,27 @@ TABLE_NAME = "subscriptions_discord"
 ## ====================
 ## FUNCIÓN HELPER DE STRIPE
 ## ====================
-
 def get_customer_aggregated_status(customer_id: str):
-    """
-    Verifica TODAS las suscripciones de un cliente y devuelve el "mejor" estado.
-    Si CUALQUIERA está activa, devuelve "active".
-    """
     try:
         subscriptions = stripe.Subscription.list(customer=customer_id, status='all', limit=20) 
-
         if not subscriptions.data:
             return "canceled"
-
         for sub in subscriptions.data:
             if sub.status in ACTIVE_STATUSES:
                 return sub.status
-
         return subscriptions.data[0].status
-        
     except Exception as e:
         print(f"🚨 Error en get_customer_aggregated_status para {customer_id}: {e}")
         return None
 
 ## ====================
-## FASTAPI APP PARA WEBHOOK STRIPE
+## FASTAPI APP (WEBHOOK STRIPE + HEALTHCHECK)
 ## ====================
 app = FastAPI()
+
+@app.get("/")
+async def home():
+    return {"status": "Combined Bot Active (Telegram + Discord)"}
 
 @app.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
@@ -103,15 +144,12 @@ async def stripe_webhook(request: Request):
     print(f"Received Stripe event: {event_type} for customer {customer_id}")
 
     if event_type in ["customer.subscription.updated", "customer.subscription.created", "customer.subscription.deleted"]:
-        
         final_status = get_customer_aggregated_status(customer_id)
-
         if final_status is None:
             raise HTTPException(status_code=500, detail="Error retrieving aggregated status from Stripe.")
 
         try:
             response = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).execute()
-            
             if response.data:
                 supabase.table(TABLE_NAME).update({
                     "subscription_status": final_status, 
@@ -123,14 +161,110 @@ async def stripe_webhook(request: Request):
                     "subscription_status": final_status, 
                     "updated_at": discord.utils.utcnow().isoformat()
                 }).execute()
-                
             return JSONResponse(status_code=200, content={"message": f"Status updated for customer {customer_id}."})
-        
         except Exception as e:
             print(f"🚨 Supabase Error: {e}")
             raise HTTPException(status_code=500, detail=f"Supabase processing error: {e}")
 
     return JSONResponse(status_code=200, content={"message": "Event handled."})
+
+## ====================
+## TELEGRAM BOT
+## ====================
+telegram_bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+def check_membership(user_id):
+    clean_id = str(CHANNEL_ID).strip().replace("'", "").replace('"', "")
+    if not clean_id.startswith("-100"):
+        clean_id = "-100" + clean_id
+    print(f"DEBUG: Checking {user_id} in {clean_id}", flush=True)
+    try:
+        chat_id_to_check = int(clean_id)
+        member = telegram_bot.get_chat_member(chat_id_to_check, user_id)
+        if member.status in ['creator', 'administrator', 'member', 'restricted']:
+            return True
+        print(f"DEBUG: Rejected. Status: '{member.status}'", flush=True)
+        return False
+    except Exception as e:
+        print(f"ERROR: {e}", flush=True)
+        return False
+
+def get_main_menu():
+    markup = InlineKeyboardMarkup(row_width=1)
+    btn1 = InlineKeyboardButton("🔥 Img to Video Bot 1", url=telegram_links["1"])
+    btn2 = InlineKeyboardButton("🤖 Img to Video Bot 2", url=telegram_links["2"])
+    btn3 = InlineKeyboardButton("🤖 Video to Video Bot 3", url=telegram_links["3"])
+    btn_news = InlineKeyboardButton("✨ What's New? (Updates) 🆕", callback_data="whats_new")
+    btn_gallery = InlineKeyboardButton("🔥 Gallery 🔥", callback_data="show_gallery")
+    markup.add(btn1, btn2, btn3, btn_news, btn_gallery)
+    return markup
+
+@telegram_bot.message_handler(commands=['start'])
+def send_welcome(message):
+    user_id = message.from_user.id
+    if check_membership(user_id):
+        telegram_bot.reply_to(message, "✅ **Access Granted**\nSelect an available server below:", reply_markup=get_main_menu(), parse_mode="Markdown")
+    else:
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("👉 Join Channel First", url=CHANNEL_LINK))
+        markup.add(InlineKeyboardButton("🔄 I Joined, Verify Me", callback_data="check_again"))
+        telegram_bot.reply_to(message, "⛔ **Access Restricted**\n\nTo use our bots, you must join our official channel first.", reply_markup=markup, parse_mode="Markdown")
+
+@telegram_bot.callback_query_handler(func=lambda call: call.data == "whats_new")
+def show_updates(call):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"))
+    telegram_bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=WHATS_NEW_TEXT,
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+@telegram_bot.callback_query_handler(func=lambda call: call.data == "show_gallery")
+def show_gallery_menu(call):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"))
+    telegram_bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=GALLERY_TEXT,
+        disable_web_page_preview=False, 
+        reply_markup=markup
+    )
+
+@telegram_bot.callback_query_handler(func=lambda call: call.data == "back_to_menu")
+def back_to_main(call):
+    telegram_bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="✅ **Access Granted**\nSelect an available server below:",
+        reply_markup=get_main_menu(),
+        parse_mode="Markdown"
+    )
+
+@telegram_bot.callback_query_handler(func=lambda call: call.data == "check_again")
+def callback_verify(call):
+    if check_membership(call.from_user.id):
+        telegram_bot.edit_message_text("✅ **Verified!** Choose your bot:", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu(), parse_mode="Markdown")
+    else:
+        telegram_bot.answer_callback_query(call.id, "❌ You are not in the channel yet. Join and try again.", show_alert=True)
+
+@telegram_bot.message_handler(commands=['setlink'])
+def admin_setlink(message):
+    if message.from_user.id == TELEGRAM_ADMIN_ID:
+        try:
+            parts = message.text.split()
+            bot_num = parts[1]
+            new_url = parts[2]
+            if bot_num in telegram_links:
+                telegram_links[bot_num] = new_url
+                telegram_bot.reply_to(message, f"✅ Link {bot_num} updated.")
+            else:
+                telegram_bot.reply_to(message, "❌ Only 1, 2, 3.")
+        except:
+            telegram_bot.reply_to(message, "⚠️ Error.")
 
 ## ====================
 ## DISCORD BOT
@@ -139,20 +273,20 @@ intents = discord.Intents.default()
 intents.members = True
 intents.messages = True
 intents.message_content = True
-client = discord.Client(intents=intents)
+discord_client = discord.Client(intents=intents)
 
 guild = None
 role = None
 admin_log_channel = None
 
-@client.event
+@discord_client.event
 async def on_ready():
     global guild, role, admin_log_channel
-    print(f"✅ Logged in as {client.user}")
-    guild = client.get_guild(DISCORD_GUILD_ID)
+    print(f"✅ Discord logged in as {discord_client.user}")
+    guild = discord_client.get_guild(DISCORD_GUILD_ID)
     if guild:
         role = guild.get_role(DISCORD_ROLE_ID)
-        admin_log_channel = client.get_channel(ADMIN_LOG_CHANNEL_ID)
+        admin_log_channel = discord_client.get_channel(ADMIN_LOG_CHANNEL_ID)
         print(f"Guild: {guild.name}, Role: {role.name if role else 'Not found'}")
     else:
         print(f"❌ Guild {DISCORD_GUILD_ID} not found.")
@@ -160,10 +294,9 @@ async def on_ready():
     if not check_subscriptions.is_running():
         check_subscriptions.start()
 
-## ============ Comando '!link' ============
-@client.event
+@discord_client.event
 async def on_message(message):
-    if message.author == client.user:
+    if message.author == discord_client.user:
         return
 
     if isinstance(message.channel, discord.DMChannel):
@@ -191,7 +324,6 @@ async def on_message(message):
                     await message.channel.send("⚠️ Email found, but no active subscription.")
                     return
                 
-                # Buscar si ya existe registro con este stripe_customer_id
                 response = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).execute()
 
                 update_data = {
@@ -222,10 +354,7 @@ async def on_message(message):
             except Exception as e:
                 print(f"Link error: {e}")
                 await message.channel.send("❌ Error linking account.")
-    else:
-        return
 
-## ============ Asignación Automática (CORREGIDA - SIN PARPADEO) ============
 @tasks.loop(minutes=10)
 async def check_subscriptions():
     print("🔄 Checking subscriptions...")
@@ -233,14 +362,9 @@ async def check_subscriptions():
         return
     
     try:
-        # 1. Recuperamos TODAS las filas vinculadas
         response = supabase.table(TABLE_NAME).select("*").neq("discord_user_id", "None").execute()
-        
-        # Mapa para decidir el estado FINAL del usuario
-        # Clave: Discord User ID -> Valor: True (tiene acceso) / False (no tiene)
         user_access_map = {}
 
-        # 2. Procesamos filas y consultamos Stripe
         for user_data in response.data:
             discord_user_id = user_data.get("discord_user_id")
             customer_id = user_data.get("stripe_customer_id")
@@ -249,33 +373,24 @@ async def check_subscriptions():
             if not discord_user_id or not customer_id:
                 continue
 
-            # Consultamos Stripe
             final_status = get_customer_aggregated_status(customer_id)
-            
-            # Fallback a DB si falla Stripe
             if final_status is None:
                 final_status = db_status 
 
-            # Actualizamos DB si hay discrepancia
             if final_status != db_status:
                 supabase.table(TABLE_NAME).update({
                     "subscription_status": final_status, 
                     "updated_at": discord.utils.utcnow().isoformat()
                 }).eq("stripe_customer_id", customer_id).execute()
 
-            # LÓGICA DE PRIORIDAD: Si tiene AL MENOS UNA activa, gana el acceso.
             is_active_now = final_status in ACTIVE_STATUSES
             
             if discord_user_id not in user_access_map:
-                # Primera vez que vemos al usuario en este ciclo
                 user_access_map[discord_user_id] = is_active_now
             else:
-                # Ya vimos al usuario (tiene otra fila en la DB)
-                # Si la actual es True, sobrescribimos cualquier False anterior.
                 if is_active_now:
                     user_access_map[discord_user_id] = True
 
-        # 3. Aplicamos roles UNA VEZ por usuario (basado en el mapa final)
         for discord_user_id, should_have_access in user_access_map.items():
             try:
                 member = guild.get_member(int(discord_user_id))
@@ -295,7 +410,7 @@ async def check_subscriptions():
                         if admin_log_channel:
                             await admin_log_channel.send(f"🔴 **Rol removido:** {member.mention} (Suscripción inactiva).")
                 
-                await asyncio.sleep(0.1) # Evitar Rate Limits
+                await asyncio.sleep(0.1)
 
             except Exception as e:
                 print(f"Error gestionando rol para {discord_user_id}: {e}")
@@ -304,13 +419,51 @@ async def check_subscriptions():
         print(f"Error crítico en check_subscriptions: {e}")
 
 ## ====================
-## INICIO UVICORN PARA FASTAPI
+## FUNCIONES DE INICIO
+## ====================
+def start_fastapi():
+    """Inicia el servidor FastAPI"""
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+def start_telegram():
+    """Inicia el bot de Telegram con auto-reinicio"""
+    print("🤖 Iniciando Telegram Bot...")
+    while True:
+        try:
+            telegram_bot.infinity_polling(skip_pending=True, timeout=90, long_polling_timeout=5)
+        except Exception as e:
+            print(f"⚠️ Telegram bot se cayó: {e}")
+            print("🔄 Reiniciando en 5 segundos...")
+            time.sleep(5)
+
+def start_discord():
+    """Inicia el bot de Discord"""
+    print("🤖 Iniciando Discord Bot...")
+    discord_client.run(DISCORD_BOT_TOKEN)
+
+## ====================
+## MAIN
 ## ====================
 if __name__ == "__main__":
-
-    def start_fastapi():
-        uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
-
-    threading.Thread(target=start_fastapi).start()
+    print("=" * 50)
+    print("🚀 INICIANDO BOT COMBINADO")
+    print("=" * 50)
     
-    client.run(DISCORD_BOT_TOKEN)
+    # Iniciar FastAPI en un thread
+    fastapi_thread = threading.Thread(target=start_fastapi, daemon=True)
+    fastapi_thread.start()
+    print("✅ FastAPI iniciado")
+    
+    # Iniciar Telegram en un thread
+    telegram_thread = threading.Thread(target=start_telegram, daemon=True)
+    telegram_thread.start()
+    print("✅ Telegram Bot iniciado")
+    
+    # Iniciar Discord en el thread principal
+    try:
+        start_discord()
+    except KeyboardInterrupt:
+        print("\n👋 Bot detenido por el usuario")
+    except Exception as e:
+        print(f"❌ Error crítico: {e}")
