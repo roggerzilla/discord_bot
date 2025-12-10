@@ -43,11 +43,11 @@ Here is what we have improved for you:
 
 🤖 **Bot 2 (Img to Video):**
 • Added new:
-• Cowgirl
-• Cowgirl big tts
 • lick pnis
 • double bj
 • triple bj
+• deepthorat machine
+• ALL VERSIONS HS
 
 🤖 **Bot 3 (Video to Video):**
 • bg tts
