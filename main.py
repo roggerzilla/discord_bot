@@ -43,11 +43,9 @@ Here is what we have improved for you:
 
 🤖 **Bot 2 (Img to Video):**
 • Added new:
-• lick pnis
-• double bj
-• triple bj
 • deepthorat machine
-• ALL VERSIONS HS
+• Footjob
+• ALL VERSIONS HD
 
 🤖 **Bot 3 (Video to Video):**
 • bg tts
@@ -58,13 +56,13 @@ Here is what we have improved for you:
 GALLERY_TEXT = """
 🤖 Our Bots and Exclusive Galleries ✨
 
-🖼 Image to Video (Option 1)
+🖼 Image to Video (monkeyvideos 1)
 Gallery: https://postimg.cc/gallery/Kx5KSSs
 
-🖼 Image to Video (Option 2)
+🖼 Image to Video (videos69 2)
 Gallery: https://postimg.cc/gallery/z3W9JnW
 
-📹 Video to Video
+📹 Nude videos
 Gallery: https://postimg.cc/0K6R05tS
 
 Enjoy! 🔥
@@ -194,9 +192,9 @@ def check_membership(user_id):
 
 def get_main_menu():
     markup = InlineKeyboardMarkup(row_width=1)
-    btn1 = InlineKeyboardButton("🔥 Img to Video Bot 1", url=telegram_links["1"])
-    btn2 = InlineKeyboardButton("🤖 Img to Video Bot 2", url=telegram_links["2"])
-    btn3 = InlineKeyboardButton("🤖 Video to Video Bot 3", url=telegram_links["3"])
+    btn1 = InlineKeyboardButton("🔥 Img to Video Bot 1 monkeyvideos", url=telegram_links["1"])
+    btn2 = InlineKeyboardButton("🤖 Img to Video Bot 2 videos69", url=telegram_links["2"])
+    btn3 = InlineKeyboardButton("🤖 Nudify videos", url=telegram_links["3"])
     btn_news = InlineKeyboardButton("✨ What's New? (Updates) 🆕", callback_data="whats_new")
     btn_gallery = InlineKeyboardButton("🔥 Gallery 🔥", callback_data="show_gallery")
     markup.add(btn1, btn2, btn3, btn_news, btn_gallery)
