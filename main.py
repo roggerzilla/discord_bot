@@ -26,7 +26,7 @@ load_dotenv()
 ## CONFIGURACIÓN TELEGRAM
 ## ====================
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', 'TU_TOKEN_AQUI')
-CHANNEL_ID = os.environ.get('CHANNEL_ID', '-1002620828537') 
+CHANNEL_ID = os.environ.get('CHANNEL_ID', '-1003465544020') 
 CHANNEL_LINK = os.environ.get('CHANNEL_LINK', 'https://t.me/monkey_videos')
 TELEGRAM_ADMIN_ID = int(os.environ.get('TELEGRAM_ADMIN_ID', '0'))
 
