@@ -17,8 +17,18 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 load_dotenv()
 
 ## ===============================
-## BOT COMBINADO: TELEGRAM + DISCORD (TIERED VERSION)
+## BOT COMBINADO: TELEGRAM + DISCORD (TIERED SAFE MODE)
 ## ===============================
+
+## ====================
+## CONFIGURACIÓN DE TIERS (NUEVO)
+## ====================
+# Estos son tus tiers nuevos.
+TIER_MAPPING = {
+    "prod_SZ9dmrnfH9AwhO": 1459004030381592606, # Tier 1
+    "prod_SZ9eQne47KPluz": 1459004119711879372, # Tier 2
+    "prod_SZ9ezfEZ3OhuFC": 1459004146970787861  # Tier 3
+}
 
 ## ====================
 ## CONFIGURACIÓN TELEGRAM
@@ -36,12 +46,34 @@ telegram_links = {
 
 WHATS_NEW_TEXT = """
 📢 **WEEKLY UPDATES & NEWS** 🚀
-Here is what we have improved for you...
+
+Here is what we have improved for you:
+
+🤖 **Bot 2 (Img to Video):**
+• Added new:
+• deepthorat machine
+• Footjob
+• ALL VERSIONS HD
+
+🤖 **Bot 3 (Video to Video):**
+• bg tts
+
+✨ _Stay tuned to our channel for more updates!_
 """
 
 GALLERY_TEXT = """
 🤖 Our Bots and Exclusive Galleries ✨
-...
+
+🖼 Image to Video (monkeyvideos 1)
+Gallery: https://postimg.cc/gallery/Kx5KSSs
+
+🖼 Image to Video (videos69 2)
+Gallery: https://postimg.cc/gallery/z3W9JnW
+
+📹 Nude videos
+Gallery: https://postimg.cc/0K6R05tS
+
+Enjoy! 🔥
 """
 
 ## ====================
@@ -54,32 +86,18 @@ STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 DISCORD_GUILD_ID = int(os.environ.get("DISCORD_GUILD_ID", "0"))
 
-# ROL POR DEFECTO (Para usuarios antiguos o fallbacks)
+# EL ROL LEGACY (EL QUE USABAS ANTES)
 DEFAULT_ROLE_ID = int(os.environ.get("DISCORD_ROLE_ID", "0")) 
 ADMIN_LOG_CHANNEL_ID = int(os.environ.get("ADMIN_LOG_CHANNEL_ID", "0"))
 
 stripe.api_key = STRIPE_SECRET_KEY
-ACTIVE_STATUSES = ["active", "trialing"]
+# AGREGUE 'past_due' PARA QUE NO SAQUE A GENTE CUYO PAGO FALLÓ HOY PERO SE ARREGLA MAÑANA
+ACTIVE_STATUSES = ["active", "trialing", "past_due"]
 
-## ====================
-## ⚙️ CONFIGURACIÓN DE TIERS (NUEVO)
-## ====================
-# Mapea el ID del PRODUCTO de Stripe (prod_XXXX) al ID del ROL de Discord.
-# Puedes obtener el prod_ID en tu Dashboard de Stripe -> Catálogo de productos.
-TIER_MAPPING = {
-    # TIER 1 (Más barato)
-    "prod_SZ9dmrnfH9AwhO": 1459004030381592606, 
-
-    # TIER 2
-    "prod_SZ9eQne47KPluz": 1459004119711879372,
-
-    # TIER 3 (Más caro)
-    "prod_SZ9ezfEZ3OhuFC": 1459004146970787861
-}
-# Lista de todos los roles que este bot administra (para poder quitarlos si expira)
-MANAGED_ROLE_IDS = list(TIER_MAPPING.values())
+# Juntamos todos los roles posibles (Tiers + Legacy) para saber cuáles administrar
+MANAGED_ROLES = list(TIER_MAPPING.values())
 if DEFAULT_ROLE_ID:
-    MANAGED_ROLE_IDS.append(DEFAULT_ROLE_ID)
+    MANAGED_ROLES.append(DEFAULT_ROLE_ID)
 
 ## ====================
 ## SUPABASE
@@ -88,35 +106,35 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 TABLE_NAME = "subscriptions_discord"
 
 ## ====================
-## FUNCIÓN HELPER DE STRIPE (MODIFICADA)
+## FUNCIÓN HELPER DE STRIPE (MEJORADA PARA PRODUCTOS)
 ## ====================
 def get_customer_subscription_data(customer_id: str):
     """
-    Retorna una tupla: (status, product_id)
+    Devuelve (status, product_id).
+    Si hay multiple, prioriza la activa.
     """
     try:
+        # Expandimos 'data.plan.product' para obtener el ID real (prod_XXX)
         subscriptions = stripe.Subscription.list(customer=customer_id, status='all', limit=20, expand=['data.plan.product']) 
         if not subscriptions.data:
             return "canceled", None
         
-        # Prioridad: Buscar alguna activa
+        # 1. Buscar suscripción activa
         for sub in subscriptions.data:
             if sub.status in ACTIVE_STATUSES:
-                # Obtener el Product ID (prod_XXX)
-                product_id = sub.plan.product
-                if isinstance(product_id, dict): # A veces Stripe lo expande, a veces es string
-                    product_id = product_id.get('id')
-                return sub.status, product_id
+                prod_obj = sub.plan.product
+                # A veces stripe devuelve objeto, a veces string ID
+                p_id = prod_obj.get('id') if isinstance(prod_obj, dict) else prod_obj
+                return sub.status, p_id
         
-        # Si no hay activas, devolver el status de la más reciente
-        latest_sub = subscriptions.data[0]
-        p_id = latest_sub.plan.product
-        if isinstance(p_id, dict):
-            p_id = p_id.get('id')
-        return latest_sub.status, p_id
+        # 2. Si no hay activa, devolver la última
+        latest = subscriptions.data[0]
+        prod_obj = latest.plan.product
+        p_id = prod_obj.get('id') if isinstance(prod_obj, dict) else prod_obj
+        return latest.status, p_id
 
     except Exception as e:
-        print(f"🚨 Error en get_customer_subscription_data para {customer_id}: {e}")
+        print(f"🚨 Error en Stripe Helper para {customer_id}: {e}")
         return None, None
 
 ## ====================
@@ -126,7 +144,7 @@ app = FastAPI()
 
 @app.get("/")
 async def home():
-    return {"status": "Combined Bot Active (Tiered Version)"}
+    return {"status": "Combined Bot Active (Safe Mode)"}
 
 @app.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
@@ -136,7 +154,7 @@ async def stripe_webhook(request: Request):
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Webhook Error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid payload/sig")
     
     event_type = event["type"]
     data_object = event["data"]["object"]
@@ -148,35 +166,32 @@ async def stripe_webhook(request: Request):
         customer_id = data_object.get("id")
 
     if not customer_id:
-        return JSONResponse(status_code=200, content={"message": "Event ignored (No customer ID)."})
+        return JSONResponse(status_code=200, content={"message": "Ignored"})
 
     if event_type in ["customer.subscription.updated", "customer.subscription.created", "customer.subscription.deleted"]:
-        final_status, _ = get_customer_subscription_data(customer_id) # Solo nos importa el status para actualizar DB
-        
-        if final_status is None:
-            raise HTTPException(status_code=500, detail="Error retrieving status from Stripe.")
+        # Solo actualizamos el status en DB
+        status, _ = get_customer_subscription_data(customer_id)
+        if status:
+            try:
+                exists = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).execute()
+                if exists.data:
+                    supabase.table(TABLE_NAME).update({
+                        "subscription_status": status, 
+                        "updated_at": discord.utils.utcnow().isoformat()
+                    }).eq("stripe_customer_id", customer_id).execute()
+                else:
+                    supabase.table(TABLE_NAME).insert({
+                        "stripe_customer_id": customer_id, 
+                        "subscription_status": status, 
+                        "updated_at": discord.utils.utcnow().isoformat()
+                    }).execute()
+            except Exception as e:
+                print(f"🚨 Supabase webhook error: {e}")
 
-        try:
-            # Actualizamos o insertamos en Supabase
-            existing = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).execute()
-            if existing.data:
-                supabase.table(TABLE_NAME).update({
-                    "subscription_status": final_status, 
-                    "updated_at": discord.utils.utcnow().isoformat()
-                }).eq("stripe_customer_id", customer_id).execute()
-            else:
-                supabase.table(TABLE_NAME).insert({
-                    "stripe_customer_id": customer_id, 
-                    "subscription_status": final_status, 
-                    "updated_at": discord.utils.utcnow().isoformat()
-                }).execute()
-        except Exception as e:
-            print(f"🚨 Supabase Error: {e}")
-
-    return JSONResponse(status_code=200, content={"message": "Event handled."})
+    return JSONResponse(status_code=200, content={"message": "Handled"})
 
 ## ====================
-## TELEGRAM BOT (Sin cambios mayores)
+## TELEGRAM BOT (TU CÓDIGO INTACTO)
 ## ====================
 telegram_bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -186,43 +201,60 @@ def check_membership(user_id):
     try:
         member = telegram_bot.get_chat_member(int(clean_id), user_id)
         return member.status in ['creator', 'administrator', 'member', 'restricted']
-    except Exception as e:
-        print(f"Tele-Check Error: {e}")
+    except:
         return False
 
 def get_main_menu():
     markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        InlineKeyboardButton("🔥 Img to Video Bot 1", url=telegram_links["1"]),
-        InlineKeyboardButton("🤖 Img to Video Bot 2", url=telegram_links["2"]),
-        InlineKeyboardButton("🤖 Nudify videos", url=telegram_links["3"]),
-        InlineKeyboardButton("✨ What's New?", callback_data="whats_new"),
-        InlineKeyboardButton("🔥 Gallery 🔥", callback_data="show_gallery")
-    )
+    btn1 = InlineKeyboardButton("🔥 Img to Video Bot 1 monkeyvideos", url=telegram_links["1"])
+    btn2 = InlineKeyboardButton("🤖 Img to Video Bot 2 videos69", url=telegram_links["2"])
+    btn3 = InlineKeyboardButton("🤖 Nudify videos", url=telegram_links["3"])
+    btn_news = InlineKeyboardButton("✨ What's New? (Updates) 🆕", callback_data="whats_new")
+    btn_gallery = InlineKeyboardButton("🔥 Gallery 🔥", callback_data="show_gallery")
+    markup.add(btn1, btn2, btn3, btn_news, btn_gallery)
     return markup
 
 @telegram_bot.message_handler(commands=['start'])
 def send_welcome(message):
     if check_membership(message.from_user.id):
-        telegram_bot.reply_to(message, "✅ **Access Granted**", reply_markup=get_main_menu(), parse_mode="Markdown")
+        telegram_bot.reply_to(message, "✅ **Access Granted**\nSelect an available server below:", reply_markup=get_main_menu(), parse_mode="Markdown")
     else:
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("👉 Join Channel", url=CHANNEL_LINK), InlineKeyboardButton("🔄 Verify Me", callback_data="check_again"))
-        telegram_bot.reply_to(message, "⛔ **Access Restricted**", reply_markup=markup, parse_mode="Markdown")
+        markup.add(InlineKeyboardButton("👉 Join Channel First", url=CHANNEL_LINK), InlineKeyboardButton("🔄 I Joined, Verify Me", callback_data="check_again"))
+        telegram_bot.reply_to(message, "⛔ **Access Restricted**\n\nTo use our bots, you must join our official channel first.", reply_markup=markup, parse_mode="Markdown")
 
-@telegram_bot.callback_query_handler(func=lambda call: call.data in ["whats_new", "show_gallery", "back_to_menu", "check_again"])
-def handle_callbacks(call):
-    if call.data == "whats_new":
-        telegram_bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=WHATS_NEW_TEXT, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")))
-    elif call.data == "show_gallery":
-        telegram_bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=GALLERY_TEXT, disable_web_page_preview=False, reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")))
-    elif call.data == "back_to_menu":
-        telegram_bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ **Access Granted**", reply_markup=get_main_menu(), parse_mode="Markdown")
-    elif call.data == "check_again":
-        if check_membership(call.from_user.id):
-            telegram_bot.edit_message_text("✅ **Verified!**", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu(), parse_mode="Markdown")
-        else:
-            telegram_bot.answer_callback_query(call.id, "❌ Join channel first!", show_alert=True)
+@telegram_bot.callback_query_handler(func=lambda call: call.data == "whats_new")
+def show_updates(call):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"))
+    telegram_bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=WHATS_NEW_TEXT, parse_mode="Markdown", reply_markup=markup)
+
+@telegram_bot.callback_query_handler(func=lambda call: call.data == "show_gallery")
+def show_gallery_menu(call):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"))
+    telegram_bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=GALLERY_TEXT, disable_web_page_preview=False, reply_markup=markup)
+
+@telegram_bot.callback_query_handler(func=lambda call: call.data == "back_to_menu")
+def back_to_main(call):
+    telegram_bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ **Access Granted**\nSelect an available server below:", reply_markup=get_main_menu(), parse_mode="Markdown")
+
+@telegram_bot.callback_query_handler(func=lambda call: call.data == "check_again")
+def callback_verify(call):
+    if check_membership(call.from_user.id):
+        telegram_bot.edit_message_text("✅ **Verified!** Choose your bot:", call.message.chat.id, call.message.message_id, reply_markup=get_main_menu(), parse_mode="Markdown")
+    else:
+        telegram_bot.answer_callback_query(call.id, "❌ You are not in the channel yet.", show_alert=True)
+
+@telegram_bot.message_handler(commands=['setlink'])
+def admin_setlink(message):
+    if message.from_user.id == TELEGRAM_ADMIN_ID:
+        try:
+            parts = message.text.split()
+            if parts[1] in telegram_links:
+                telegram_links[parts[1]] = parts[2]
+                telegram_bot.reply_to(message, f"✅ Link {parts[1]} updated.")
+        except: pass
 
 ## ====================
 ## DISCORD BOT
@@ -243,6 +275,9 @@ async def on_ready():
     guild = discord_client.get_guild(DISCORD_GUILD_ID)
     if guild:
         admin_log_channel = discord_client.get_channel(ADMIN_LOG_CHANNEL_ID)
+        print(f"Guild: {guild.name}")
+    else:
+        print(f"❌ Guild {DISCORD_GUILD_ID} not found.")
     
     if not check_subscriptions.is_running():
         check_subscriptions.start()
@@ -250,8 +285,7 @@ async def on_ready():
 @discord_client.event
 async def on_message(message):
     if message.author == discord_client.user: return
-    
-    # COMANDO LINKEO
+
     if isinstance(message.channel, discord.DMChannel) and message.content.lower().startswith("!link"):
         parts = message.content.split()
         if len(parts) != 2:
@@ -260,28 +294,26 @@ async def on_message(message):
 
         user_email = parts[1].lower()
         if not re.match(r"[^@]+@[^@]+\.[^@]+", user_email):
-            await message.channel.send("❌ Invalid email.")
+            await message.channel.send("❌ Invalid email format.")
             return
 
         try:
             customers = stripe.Customer.list(email=user_email, limit=1)
             if not customers.data:
-                await message.channel.send("❌ No Stripe customer found.")
+                await message.channel.send("❌ No customer found with that email in Stripe.")
                 return
 
             customer_id = customers.data[0].id
-            # Obtenemos STATUS y PRODUCTO
+            # Usamos la nueva función que trae el producto
             stripe_status, product_id = get_customer_subscription_data(customer_id)
 
             if stripe_status not in ACTIVE_STATUSES:
                 await message.channel.send("⚠️ Email found, but no active subscription.")
                 return
             
-            # --- LÓGICA DE TIERS INSTANTÁNEA ---
-            # Determinamos qué rol le toca
+            # --- DETERMINAR ROL ---
             target_role_id = TIER_MAPPING.get(product_id, DEFAULT_ROLE_ID)
             
-            # Guardamos en Supabase
             response = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", customer_id).execute()
             update_data = {
                 "discord_user_id": str(message.author.id), 
@@ -290,31 +322,24 @@ async def on_message(message):
             }
 
             if response.data:
-                existing_discord = response.data[0].get("discord_user_id")
-                if existing_discord and existing_discord != str(message.author.id):
+                existing = response.data[0].get("discord_user_id")
+                if existing and existing != str(message.author.id):
                     await message.channel.send("⚠️ Subscription linked to another Discord account.")
                     return
                 supabase.table(TABLE_NAME).update(update_data).eq("stripe_customer_id", customer_id).execute()
             else:
                 supabase.table(TABLE_NAME).insert(dict(stripe_customer_id=customer_id, **update_data)).execute()
 
-            # Asignar rol inmediatamente si es posible
+            # ASIGNAR ROL INMEDIATO
             if guild:
                 member = guild.get_member(message.author.id)
-                if member:
-                    role_obj = guild.get_role(target_role_id)
-                    if role_obj:
-                        await member.add_roles(role_obj)
-                        # Opcional: Quitar otros roles de tiers si existieran (limpieza)
-                        for rid in MANAGED_ROLE_IDS:
-                            if rid != target_role_id:
-                                r_rem = guild.get_role(rid)
-                                if r_rem and r_rem in member.roles:
-                                    await member.remove_roles(r_rem)
+                role_obj = guild.get_role(target_role_id)
+                if member and role_obj:
+                    await member.add_roles(role_obj, reason="Linkeo exitoso")
 
-            await message.channel.send("✅ Account linked! Access activated.")
+            await message.channel.send("✅ Account linked! Premium access activated.")
             if admin_log_channel:
-                await admin_log_channel.send(f"🟢 **Linked:** {message.author.mention} (`{user_email}`) -> Role: {target_role_id}")
+                await admin_log_channel.send(f"🟢 **Link:** {message.author.mention} (`{user_email}`) -> RoleID: {target_role_id}")
 
         except Exception as e:
             print(f"Link error: {e}")
@@ -334,7 +359,6 @@ async def check_subscriptions():
             
             if not discord_user_id or not customer_id: continue
 
-            # Obtener datos frescos de Stripe
             final_status, product_id = get_customer_subscription_data(customer_id)
             
             # Actualizar DB
@@ -347,58 +371,67 @@ async def check_subscriptions():
             member = guild.get_member(int(discord_user_id))
             if not member: continue
 
+            # === LÓGICA DE SEGURIDAD MÁXIMA ===
+            
             if final_status in ACTIVE_STATUSES:
-                # USUARIO ACTIVO: SOLO DAR ROL, NO QUITAR NADA
-                target_role_id = TIER_MAPPING.get(product_id, DEFAULT_ROLE_ID)
+                # USUARIO ACTIVO:
+                # 1. Averiguamos qué rol le toca.
+                # Si es un producto nuevo -> Rol del Tier.
+                # Si es un producto viejo (desconocido) -> Rol Default (Legacy).
+                role_to_give_id = TIER_MAPPING.get(product_id, DEFAULT_ROLE_ID)
                 
-                if target_role_id == 0:
-                    print(f"⚠️ No role for product {product_id} (Check .env DEFAULT_ROLE_ID)")
-                    continue
+                if role_to_give_id == 0: continue
 
-                target_role = guild.get_role(target_role_id)
+                role_obj = guild.get_role(role_to_give_id)
 
-                if target_role and target_role not in member.roles:
-                    await member.add_roles(target_role, reason="Suscripción activa check")
-                    print(f"✅ Rol {target_role.name} dado a {member.name}")
-
-                # ❌ SECCIÓN DE LIMPIEZA ELIMINADA POR SEGURIDAD ❌
-                # (Aquí estaba el código que borraba roles si no coincidían exactamente)
+                # 2. SOLO SUMAMOS ROL.
+                # NUNCA corremos un 'remove_roles' aquí.
+                # Así los Legacy conservan su rol, y si alguien compra Upgrade, se queda con los dos.
+                if role_obj and role_obj not in member.roles:
+                    await member.add_roles(role_obj, reason="Suscripción activa check")
+                    print(f"✅ Rol {role_obj.name} dado a {member.display_name}")
 
             else:
-                # USUARIO CANCELADO/IMPAGO: AQUÍ SÍ QUITAMOS ROLES
+                # USUARIO INACTIVO (CANCELADO/IMPAGO REAL):
+                # Aquí sí limpiamos para que no tengan acceso gratis.
+                # Quitamos CUALQUIERA de los roles gestionados (Tiers o Legacy).
                 roles_removed = []
-                for rid in MANAGED_ROLE_IDS:
-                    r_obj = guild.get_role(rid)
-                    if r_obj and r_obj in member.roles:
-                        await member.remove_roles(r_obj, reason="Suscripción inactiva")
-                        roles_removed.append(r_obj.name)
+                for rid in MANAGED_ROLES:
+                    r_rem = guild.get_role(rid)
+                    if r_rem and r_rem in member.roles:
+                        await member.remove_roles(r_rem, reason=f"Baja: {final_status}")
+                        roles_removed.append(r_rem.name)
                 
                 if roles_removed and admin_log_channel:
-                    await admin_log_channel.send(f"🔴 **Roles removidos (No Pago):** {member.mention} ({', '.join(roles_removed)})")
-
+                    await admin_log_channel.send(f"🔴 **Baja:** {member.mention} perdió: {', '.join(roles_removed)} ({final_status})")
+            
             await asyncio.sleep(0.1)
 
     except Exception as e:
-        print(f"Error en check_subscriptions: {e}")
+        print(f"Error check_sub: {e}")
 
 ## ====================
-## INICIO
+## MAIN
 ## ====================
 def start_fastapi():
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 def start_telegram():
+    print("🤖 Iniciando Telegram...")
     while True:
         try:
             telegram_bot.infinity_polling(skip_pending=True, timeout=90)
         except:
             time.sleep(5)
 
+def start_discord():
+    print("🤖 Iniciando Discord...")
+    discord_client.run(DISCORD_BOT_TOKEN)
+
 if __name__ == "__main__":
     threading.Thread(target=start_fastapi, daemon=True).start()
     threading.Thread(target=start_telegram, daemon=True).start()
     try:
-        discord_client.run(DISCORD_BOT_TOKEN)
-    except:
-        pass
+        start_discord()
+    except: pass
