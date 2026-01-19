@@ -322,7 +322,7 @@ async def on_message(message):
 
 @tasks.loop(minutes=10)
 async def check_subscriptions():
-    print("🔄 Checking subscriptions (Tiered)...")
+    print("🔄 Checking subscriptions (SAFE MODE)...")
     if not guild: return
     
     try:
@@ -334,10 +334,10 @@ async def check_subscriptions():
             
             if not discord_user_id or not customer_id: continue
 
-            # Obtener datos frescos de Stripe (Estado y Producto)
+            # Obtener datos frescos de Stripe
             final_status, product_id = get_customer_subscription_data(customer_id)
             
-            # Actualizar DB si cambió el estatus
+            # Actualizar DB
             if final_status != user_data.get("subscription_status"):
                 supabase.table(TABLE_NAME).update({
                     "subscription_status": final_status, 
@@ -348,35 +348,24 @@ async def check_subscriptions():
             if not member: continue
 
             if final_status in ACTIVE_STATUSES:
-                # 1. Determinar el rol correcto
-                # Si el producto está en el mapa, usa ese rol. 
-                # Si NO está en el mapa (es legacy o desconocido), usa DEFAULT_ROLE_ID.
+                # USUARIO ACTIVO: SOLO DAR ROL, NO QUITAR NADA
                 target_role_id = TIER_MAPPING.get(product_id, DEFAULT_ROLE_ID)
                 
                 if target_role_id == 0:
-                    print(f"⚠️ No role mapping found for product {product_id} and no Default Role set.")
+                    print(f"⚠️ No role for product {product_id} (Check .env DEFAULT_ROLE_ID)")
                     continue
 
                 target_role = guild.get_role(target_role_id)
 
-                # 2. Asignar el rol correcto si no lo tiene
                 if target_role and target_role not in member.roles:
                     await member.add_roles(target_role, reason="Suscripción activa check")
                     print(f"✅ Rol {target_role.name} dado a {member.name}")
 
-                # 3. (OPCIONAL) Limpieza de Tiers cruzados
-                # Si el usuario actualizó de Básico a VIP, le quitamos el Básico.
-                # Si quieres que conserven ambos, comenta este bloque.
-                for rid in MANAGED_ROLE_IDS:
-                    if rid != target_role_id:
-                        r_to_remove = guild.get_role(rid)
-                        if r_to_remove and r_to_remove in member.roles:
-                            await member.remove_roles(r_to_remove, reason="Cambio de tier/Limpieza")
-                            print(f"🧹 Rol antiguo {r_to_remove.name} quitado a {member.name}")
+                # ❌ SECCIÓN DE LIMPIEZA ELIMINADA POR SEGURIDAD ❌
+                # (Aquí estaba el código que borraba roles si no coincidían exactamente)
 
             else:
-                # Caso: No activo (cancelado/impago)
-                # Quitamos TODOS los roles gestionados
+                # USUARIO CANCELADO/IMPAGO: AQUÍ SÍ QUITAMOS ROLES
                 roles_removed = []
                 for rid in MANAGED_ROLE_IDS:
                     r_obj = guild.get_role(rid)
@@ -385,9 +374,9 @@ async def check_subscriptions():
                         roles_removed.append(r_obj.name)
                 
                 if roles_removed and admin_log_channel:
-                    await admin_log_channel.send(f"🔴 **Roles removidos:** {member.mention} ({', '.join(roles_removed)}) - Status: {final_status}")
+                    await admin_log_channel.send(f"🔴 **Roles removidos (No Pago):** {member.mention} ({', '.join(roles_removed)})")
 
-            await asyncio.sleep(0.1) # Rate limit prevent
+            await asyncio.sleep(0.1)
 
     except Exception as e:
         print(f"Error en check_subscriptions: {e}")
