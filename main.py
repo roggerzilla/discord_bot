@@ -21,8 +21,6 @@ load_dotenv()
 ## ===============================
 
 # --- SAFE MODE ---
-# Pon esto en TRUE si quieres que el bot NUNCA quite roles (solo avise).
-# Pon esto en FALSE cuando confíes en que ya no saca a los premium.
 SAFE_MODE_NO_BAN = False 
 
 # Tiers
@@ -61,45 +59,44 @@ TELEGRAM_ADMIN_ID = int(os.environ.get('TELEGRAM_ADMIN_ID', '0'))
 telegram_links = { "1": os.environ.get('LINK_BOT1'), "2": os.environ.get('LINK_BOT2'), "3": os.environ.get('LINK_BOT3') }
 
 ## ====================
-## HELPER STRIPE
+## HELPER STRIPE (ASÍNCRONO - SOLUCIÓN AL CRASH)
 ## ====================
-def get_customer_subscription_data(customer_id: str):
+async def get_customer_subscription_data(customer_id: str):
     """
-    Busca si el cliente tiene AL MENOS UNA suscripción activa/trialing.
-    Ignora las canceladas si existe una activa.
+    Ejecuta las llamadas a Stripe en un hilo separado para NO BLOQUEAR a Discord.
     """
-    try:
-        # Prioridad 1: Activa
-        active = stripe.Subscription.list(customer=customer_id, status='active', limit=1, expand=['data.plan.product'])
-        if active.data: return "active", active.data[0].plan.product
-        
-        # Prioridad 2: Trialing
-        trial = stripe.Subscription.list(customer=customer_id, status='trialing', limit=1, expand=['data.plan.product'])
-        if trial.data: return "trialing", trial.data[0].plan.product
+    def _blocking_stripe_call():
+        try:
+            # Prioridad 1: Activa
+            active = stripe.Subscription.list(customer=customer_id, status='active', limit=1, expand=['data.plan.product'])
+            if active.data: return "active", active.data[0].plan.product
+            
+            # Prioridad 2: Trialing
+            trial = stripe.Subscription.list(customer=customer_id, status='trialing', limit=1, expand=['data.plan.product'])
+            if trial.data: return "trialing", trial.data[0].plan.product
 
-        # Prioridad 3: Past Due (impago reciente)
-        past = stripe.Subscription.list(customer=customer_id, status='past_due', limit=1, expand=['data.plan.product'])
-        if past.data: return "past_due", past.data[0].plan.product
+            # Prioridad 3: Past Due
+            past = stripe.Subscription.list(customer=customer_id, status='past_due', limit=1, expand=['data.plan.product'])
+            if past.data: return "past_due", past.data[0].plan.product
 
-        return "canceled", None
-    except Exception as e:
-        print(f"🚨 Stripe Error {customer_id}: {e}")
-        return None, None
+            return "canceled", None
+        except Exception as e:
+            print(f"🚨 Stripe Error {customer_id}: {e}")
+            return None, None
+
+    # AQUÍ ESTÁ LA MAGIA: asyncio.to_thread evita que el bot se congele
+    return await asyncio.to_thread(_blocking_stripe_call)
 
 def calculate_roles_to_assign(product_obj):
-    # Extraer ID del producto si es objeto o string
     product_id = product_obj.get('id') if isinstance(product_obj, dict) else product_obj
-    
     roles_to_give = []
     tier_role = TIER_MAPPING.get(product_id)
 
     if tier_role:
         roles_to_give.append(tier_role)
-        # Si es Tier 3 -> Tier 3 + Premium
         if tier_role == TIER_3_ROLE_ID:
             roles_to_give.append(DEFAULT_ROLE_ID)
     else:
-        # Legacy/Desconocido -> Tier 3 + Premium
         roles_to_give.append(TIER_3_ROLE_ID)
         roles_to_give.append(DEFAULT_ROLE_ID)
         
@@ -112,7 +109,7 @@ app = FastAPI()
 
 @app.get("/")
 async def home():
-    return {"status": "Bot Active - Multi-Account Fix Applied"}
+    return {"status": "Bot Active - Async Fix Applied"}
 
 @app.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
@@ -125,11 +122,34 @@ async def stripe_webhook(request: Request):
     return JSONResponse(status_code=200, content={"message": "ok"})
 
 ## ====================
-## TELEGRAM (TU CÓDIGO)
+## TELEGRAM 
 ## ====================
 telegram_bot = telebot.TeleBot(TELEGRAM_TOKEN)
-# ... (Aquí va tu código de Telegram intacto) ...
-# Pega aquí tus funciones de Telegram para que funcione esa parte.
+# ... (Pega aquí tus funciones de Telegram intactas) ...
+# check_membership, get_main_menu, handlers, etc.
+def check_membership(user_id):
+    clean_id = str(CHANNEL_ID).strip().replace("'", "").replace('"', "")
+    if not clean_id.startswith("-100"): clean_id = "-100" + clean_id
+    try:
+        member = telegram_bot.get_chat_member(int(clean_id), user_id)
+        return member.status in ['creator', 'administrator', 'member', 'restricted']
+    except:
+        return False
+
+def get_main_menu():
+    markup = InlineKeyboardMarkup(row_width=1)
+    btn1 = InlineKeyboardButton("🔥 Img to Video Bot 1 monkeyvideos", url=telegram_links["1"])
+    btn2 = InlineKeyboardButton("🤖 Img to Video Bot 2 videos69", url=telegram_links["2"])
+    btn3 = InlineKeyboardButton("🤖 Nudify videos", url=telegram_links["3"])
+    markup.add(btn1, btn2, btn3)
+    return markup
+
+@telegram_bot.message_handler(commands=['start'])
+def send_welcome(message):
+    if check_membership(message.from_user.id):
+        telegram_bot.reply_to(message, "✅ **Access Granted**", reply_markup=get_main_menu(), parse_mode="Markdown")
+    else:
+        telegram_bot.reply_to(message, "⛔ **Join Channel First**")
 
 ## ====================
 ## DISCORD BOT
@@ -156,7 +176,6 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot: return
     
-    # !link manual
     if isinstance(message.channel, discord.DMChannel) and message.content.lower().startswith("!link"):
         try:
             parts = message.content.split()
@@ -165,21 +184,24 @@ async def on_message(message):
                 return
             email = parts[1].lower()
             
-            custs = stripe.Customer.list(email=email, limit=1)
+            # Esto es ligero, puede ir síncrono o envolverlo también, pero stripe.Customer.list suele ser rápido
+            # Lo envolvemos por seguridad
+            custs = await asyncio.to_thread(stripe.Customer.list, email=email, limit=1)
+            
             if not custs.data:
                 await message.channel.send("❌ No customer found.")
                 return
             
             c_id = custs.data[0].id
-            status, prod = get_customer_subscription_data(c_id)
+            
+            # AWAIT AQUI ES CRUCIAL
+            status, prod = await get_customer_subscription_data(c_id)
             
             if status not in ACTIVE_STATUSES:
                 await message.channel.send("⚠️ Found account, but no active subscription.")
                 return
 
-            # Update DB
             now = discord.utils.utcnow().isoformat()
-            # Check if this discord user is already linked to THIS customer ID
             row = supabase.table(TABLE_NAME).select("*").eq("stripe_customer_id", c_id).execute()
             if row.data:
                 exist_u = row.data[0].get("discord_user_id")
@@ -190,7 +212,6 @@ async def on_message(message):
             else:
                 supabase.table(TABLE_NAME).insert({"stripe_customer_id": c_id, "discord_user_id": str(message.author.id), "subscription_status": status, "updated_at": now}).execute()
 
-            # Assign Roles
             roles = calculate_roles_to_assign(prod)
             if guild:
                 mem = guild.get_member(message.author.id)
@@ -206,96 +227,75 @@ async def on_message(message):
             print(f"Link Err: {e}")
             await message.channel.send("❌ Error.")
 
-@tasks.loop(minutes=5)
+@tasks.loop(minutes=10) # Aumentado a 10 min para reducir carga
 async def check_subscriptions():
-    print("🔄 Checking subscriptions (MULTI-ACCOUNT FIX)...")
+    print("🔄 Checking subscriptions (ASYNC FIXED)...")
     if not guild: return
     
     try:
-        # Traemos todas las filas donde hay un usuario de Discord
         response = supabase.table(TABLE_NAME).select("*").neq("discord_user_id", "None").execute()
-        
-        # Diccionario para saber si un usuario tiene AL MENOS una cuenta activa
-        # Formato: { '190186...': True, '88123...': False }
         user_active_map = {}
 
-        # 1. PRIMER PASADA: Actualizar estados con Stripe y llenar el mapa
+        # 1. ACTUALIZAR CON STRIPE (Ahora con await para no bloquear)
         for row in response.data:
             c_id = row.get("stripe_customer_id")
             d_id = row.get("discord_user_id")
             current_db_status = row.get("subscription_status")
 
-            # Chequeo REAL a Stripe para esta cuenta específica
-            real_status, prod_obj = get_customer_subscription_data(c_id)
+            # AWAIT ES OBLIGATORIO AQUI
+            real_status, prod_obj = await get_customer_subscription_data(c_id)
             
-            if real_status is None: continue # Error de API, saltar
+            if real_status is None: continue 
 
-            # Actualizar DB si cambió
             if real_status != current_db_status:
                 supabase.table(TABLE_NAME).update({
                     "subscription_status": real_status,
                     "updated_at": discord.utils.utcnow().isoformat()
                 }).eq("stripe_customer_id", c_id).execute()
 
-            # Lógica del mapa de seguridad:
-            if d_id not in user_active_map:
-                user_active_map[d_id] = False
+            if d_id not in user_active_map: user_active_map[d_id] = False
+            if real_status in ACTIVE_STATUSES: user_active_map[d_id] = True
             
-            # Si ESTA cuenta está activa, marcamos al usuario como SALVADO (True)
-            if real_status in ACTIVE_STATUSES:
-                user_active_map[d_id] = True
+            # Pequeña pausa para dejar respirar a la CPU entre usuarios
+            await asyncio.sleep(0.5)
 
-        # 2. SEGUNDA PASADA: Aplicar roles o borrar roles basados en el mapa
-        # Iteramos sobre usuarios únicos, no sobre filas
+        # 2. PROCESAR ROLES
         processed_users = set()
-
         for row in response.data:
             d_id = row.get("discord_user_id")
-            if d_id in processed_users: continue # Ya procesamos a este humano
+            if d_id in processed_users: continue
             processed_users.add(d_id)
 
             member = guild.get_member(int(d_id))
             if not member: continue
 
-            # ¿Está salvado por ALGUNA de sus cuentas?
             is_user_safe = user_active_map.get(d_id, False)
 
             if is_user_safe:
-                # === USUARIO TIENE AL MENOS UNA CUENTA ACTIVA ===
-                # Necesitamos saber qué rol darle. Buscamos SU cuenta activa para ver el producto.
-                # (Si tiene 2 activas, tomará la primera que encuentre, que es aceptable)
-                
-                # Buscamos en la respuesta original la fila activa de este usuario
                 active_row = next((r for r in response.data if r["discord_user_id"] == d_id and r["subscription_status"] in ACTIVE_STATUSES), None)
-                
                 if active_row:
-                    # Volvemos a pedir data de stripe para sacar el ID del producto correcto
-                    # (Está cacheado o es rápido)
-                    _, prod_obj = get_customer_subscription_data(active_row["stripe_customer_id"])
-                    
+                    # AWAIT OBLIGATORIO TAMBIEN AQUI
+                    _, prod_obj = await get_customer_subscription_data(active_row["stripe_customer_id"])
                     roles_to_add = calculate_roles_to_assign(prod_obj)
                     
                     for rid in roles_to_add:
                         r = guild.get_role(rid)
                         if r and r not in member.roles:
-                            await member.add_roles(r, reason="Suscripción Activa")
+                            await member.add_roles(r, reason="Sub Activa")
                             print(f"➕ Rol {r.name} a {member.display_name}")
 
             else:
-                # === USUARIO NO TIENE NINGUNA CUENTA ACTIVA ===
-                # Ahora sí es seguro borrarle los roles
                 if SAFE_MODE_NO_BAN:
-                    print(f"🛡️ SAFE MODE: {member.name} debería ser expulsado, pero lo perdonamos.")
+                    pass
                 else:
                     roles_removed = []
                     for rid in MANAGED_ROLES:
                         r = guild.get_role(rid)
                         if r and r in member.roles:
-                            await member.remove_roles(r, reason="Todas las suscripciones canceladas")
+                            await member.remove_roles(r, reason="Baja")
                             roles_removed.append(r.name)
-                    
                     if roles_removed and admin_log_channel:
-                        await admin_log_channel.send(f"🔴 **Baja:** {member.mention} perdió roles (Ninguna sub activa).")
+                        await admin_log_channel.send(f"🔴 **Baja:** {member.mention} perdió roles.")
 
             await asyncio.sleep(0.1)
 
