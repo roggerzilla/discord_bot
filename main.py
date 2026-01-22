@@ -149,7 +149,18 @@ def send_welcome(message):
     if check_membership(message.from_user.id):
         telegram_bot.reply_to(message, "✅ **Access Granted**", reply_markup=get_main_menu(), parse_mode="Markdown")
     else:
-        telegram_bot.reply_to(message, "⛔ **Join Channel First**")
+        # User is NOT a member, show "Join Channel" button
+        markup = InlineKeyboardMarkup()
+        # We use the CHANNEL_LINK variable you defined at the top of your script
+        btn_join = InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)
+        markup.add(btn_join)
+
+        telegram_bot.reply_to(
+            message, 
+            "⛔ **Access Denied**\n\nYou must join the channel first to use this bot.", 
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
 
 ## ====================
 ## DISCORD BOT
