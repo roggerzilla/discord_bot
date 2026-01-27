@@ -142,7 +142,7 @@ def get_main_menu():
     btn2 = InlineKeyboardButton("🤖 Img to Video Bot 2 videos69", url=telegram_links["2"])
     btn3 = InlineKeyboardButton("🤖 Nudify videos", url=telegram_links["3"])
     btn4 = InlineKeyboardButton("🔥 Img to img Bot ", url=telegram_links["4"])
-    markup.add(btn1, btn2, btn3)
+    markup.add(btn1, btn2, btn3, btn4)
     return markup
 
 @telegram_bot.message_handler(commands=['start'])
