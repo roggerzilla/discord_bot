@@ -56,7 +56,7 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', 'TOKEN')
 CHANNEL_ID = os.environ.get('CHANNEL_ID', '-100...') 
 CHANNEL_LINK = os.environ.get('CHANNEL_LINK', 'https://t.me/...')
 TELEGRAM_ADMIN_ID = int(os.environ.get('TELEGRAM_ADMIN_ID', '0'))
-telegram_links = { "1": os.environ.get('LINK_BOT1'), "2": os.environ.get('LINK_BOT2'), "3": os.environ.get('LINK_BOT3') }
+telegram_links = { "1": os.environ.get('LINK_BOT1'), "2": os.environ.get('LINK_BOT2'), "3": os.environ.get('LINK_BOT3'), "4": os.environ.get('LINK_BOT4') }
 
 ## ====================
 ## HELPER STRIPE (ASÍNCRONO - SOLUCIÓN AL CRASH)
@@ -141,6 +141,7 @@ def get_main_menu():
     btn1 = InlineKeyboardButton("🔥 Img to Video Bot 1 monkeyvideos", url=telegram_links["1"])
     btn2 = InlineKeyboardButton("🤖 Img to Video Bot 2 videos69", url=telegram_links["2"])
     btn3 = InlineKeyboardButton("🤖 Nudify videos", url=telegram_links["3"])
+    btn4 = InlineKeyboardButton("🔥 Img to img Bot ", url=telegram_links["4"])
     markup.add(btn1, btn2, btn3)
     return markup
 
