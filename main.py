@@ -188,25 +188,36 @@ async def on_ready():
 async def on_message(message):
     if message.author.bot: return
     
-    if isinstance(message.channel, discord.DMChannel) and message.content.lower().startswith("!link"):
+    # Limpiamos espacios extra
+    raw_content = message.content.strip()
+    
+    if isinstance(message.channel, discord.DMChannel) and raw_content.lower().startswith("!link"):
         try:
-            parts = message.content.split()
-            if len(parts) != 2:
-                await message.channel.send("❌ Use: `!link email@example.com`")
+            # --- LOGICA FLEXIBLE DE EXTRACCIÓN ---
+            # Esto extrae el email sin importar si hay espacio o no después de !link
+            email = raw_content[5:].strip() if not raw_content.lower().startswith("!link ") else raw_content[6:].strip()
+
+            if not email or "@" not in email:
+                await message.channel.send("❌ Usa: `!link email@ejemplo.com` (asegúrate de incluir el email)")
                 return
-            email = parts[1].lower()
-            
-            # Esto es ligero, puede ir síncrono o envolverlo también, pero stripe.Customer.list suele ser rápido
-            # Lo envolvemos por seguridad
-            custs = await asyncio.to_thread(stripe.Customer.list, email=email, limit=1)
+
+            # --- BÚSQUEDA ROBUSTA EN STRIPE ---
+            # Usamos .search() que es insensible a mayúsculas/minúsculas por defecto
+            # y mucho más confiable que .list()
+            query = f"email:'{email}'"
+            custs = await asyncio.to_thread(stripe.Customer.search, query=query, limit=1)
             
             if not custs.data:
-                await message.channel.send("❌ No customer found.")
+                # Intento de rescate: a veces Stripe es raro, probamos forzando minúsculas
+                query_lower = f"email:'{email.lower()}'"
+                custs = await asyncio.to_thread(stripe.Customer.search, query=query_lower, limit=1)
+
+            if not custs.data:
+                await message.channel.send(f"❌ No encontré al cliente `{email}` en Stripe. Revisa que sea el mismo correo de tu pago.")
                 return
             
+            # De aquí en adelante tu lógica de c_id, suscripción y roles...
             c_id = custs.data[0].id
-            
-            # AWAIT AQUI ES CRUCIAL
             status, prod = await get_customer_subscription_data(c_id)
             
             if status not in ACTIVE_STATUSES:
