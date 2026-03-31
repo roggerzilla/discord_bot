@@ -180,6 +180,27 @@ YDL_OPTS = {
     'retries': 3,
 }
 
+# Cargar cookies de YouTube desde variable de entorno (base64)
+# o desde archivo cookies.txt en el directorio del script
+YT_COOKIES_B64 = os.environ.get('YT_COOKIES_B64', '')
+COOKIES_FILE = 'youtube_cookies.txt'
+
+if YT_COOKIES_B64:
+    import base64
+    try:
+        cookie_data = base64.b64decode(YT_COOKIES_B64)
+        with open(COOKIES_FILE, 'wb') as f:
+            f.write(cookie_data)
+        YDL_OPTS['cookiefile'] = COOKIES_FILE
+        print(f"🍪 Cookies de YouTube cargadas desde env ({len(cookie_data)} bytes)")
+    except Exception as e:
+        print(f"⚠️ Error cargando cookies: {e}")
+elif os.path.exists(COOKIES_FILE):
+    YDL_OPTS['cookiefile'] = COOKIES_FILE
+    print(f"🍪 Cookies de YouTube cargadas desde archivo")
+else:
+    print("⚠️ Sin cookies de YouTube. Los Shorts/videos pueden fallar desde datacenter IPs.")
+
 # Instancia de instaloader (para posts públicos de IG)
 IL = instaloader.Instaloader(
     download_videos=True,
@@ -307,6 +328,11 @@ def monkey_procesar_mensaje(message):
     
     if not any(red in texto.lower() for red in redes_soportadas):
         return  # No es un link soportado, ignorar
+    
+    # YouTube Community Posts no son videos, yt-dlp no los soporta
+    if re.search(r'youtube\.com/post/', texto.lower()):
+        monkey_bot.reply_to(message, "⚠️ Ese es un **Community Post** de YouTube (texto/imágenes), no un video. Solo puedo descargar videos, shorts y reels.", parse_mode='Markdown')
+        return
     
     msg_espera = monkey_bot.reply_to(message, "⏳ Descargando en HD... dame un momento.")
     
