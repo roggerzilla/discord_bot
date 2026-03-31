@@ -1,4 +1,7 @@
 import os
+import re
+import glob
+import shutil
 import discord
 from discord.ext import tasks
 from fastapi import FastAPI, Request, HTTPException
@@ -6,13 +9,14 @@ from fastapi.responses import JSONResponse
 from supabase import create_client, Client
 import uvicorn
 import stripe
-import re
 from dotenv import load_dotenv
 import asyncio
 import threading
 import time
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo
+import yt_dlp
+import instaloader
 
 load_dotenv()
 
@@ -51,47 +55,43 @@ TABLE_NAME = "subscriptions_discord"
 
 ACTIVE_STATUSES = ["active", "trialing", "past_due"]
 
-# Telegram Config
+# Telegram Config (Bot de acceso al canal)
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', 'TOKEN')
 CHANNEL_ID = os.environ.get('CHANNEL_ID', '-100...') 
 CHANNEL_LINK = os.environ.get('CHANNEL_LINK', 'https://t.me/...')
 TELEGRAM_ADMIN_ID = int(os.environ.get('TELEGRAM_ADMIN_ID', '0'))
-telegram_links = { "1": os.environ.get('LINK_BOT1'), "2": os.environ.get('LINK_BOT2'), "3": os.environ.get('LINK_BOT3'), "4": os.environ.get('LINK_BOT4') }
+telegram_links = {
+    "1": os.environ.get('LINK_BOT1'),
+    "2": os.environ.get('LINK_BOT2'),
+    "3": os.environ.get('LINK_BOT3'),
+    "4": os.environ.get('LINK_BOT4')
+}
+
+# Telegram Config (Bot descargador - MonkeyDescargar)
+MONKEY_TELEGRAM_TOKEN = os.environ.get('MONKEY_TELEGRAM_TOKEN', '8716244791:AAEdLg6RTfdNljLb3UreC9k9wauUk-1te0o')
 
 ## ====================
 ## HELPER STRIPE (ASÍNCRONO - SOLUCIÓN AL CRASH)
 ## ====================
 async def get_customer_subscription_data(customer_id: str):
-    """
-    Ejecuta las llamadas a Stripe en un hilo separado para NO BLOQUEAR a Discord.
-    """
     def _blocking_stripe_call():
         try:
-            # Prioridad 1: Activa
             active = stripe.Subscription.list(customer=customer_id, status='active', limit=1, expand=['data.plan.product'])
             if active.data: return "active", active.data[0].plan.product
-            
-            # Prioridad 2: Trialing
             trial = stripe.Subscription.list(customer=customer_id, status='trialing', limit=1, expand=['data.plan.product'])
             if trial.data: return "trialing", trial.data[0].plan.product
-
-            # Prioridad 3: Past Due
             past = stripe.Subscription.list(customer=customer_id, status='past_due', limit=1, expand=['data.plan.product'])
             if past.data: return "past_due", past.data[0].plan.product
-
             return "canceled", None
         except Exception as e:
             print(f"🚨 Stripe Error {customer_id}: {e}")
             return None, None
-
-    # AQUÍ ESTÁ LA MAGIA: asyncio.to_thread evita que el bot se congele
     return await asyncio.to_thread(_blocking_stripe_call)
 
 def calculate_roles_to_assign(product_obj):
     product_id = product_obj.get('id') if isinstance(product_obj, dict) else product_obj
     roles_to_give = []
     tier_role = TIER_MAPPING.get(product_id)
-
     if tier_role:
         roles_to_give.append(tier_role)
         if tier_role == TIER_3_ROLE_ID:
@@ -99,7 +99,6 @@ def calculate_roles_to_assign(product_obj):
     else:
         roles_to_give.append(TIER_3_ROLE_ID)
         roles_to_give.append(DEFAULT_ROLE_ID)
-        
     return list(set([r for r in roles_to_give if r != 0]))
 
 ## ====================
@@ -109,7 +108,7 @@ app = FastAPI()
 
 @app.get("/")
 async def home():
-    return {"status": "Bot Active - Async Fix Applied"}
+    return {"status": "Bot Active - All Services Running"}
 
 @app.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
@@ -122,11 +121,10 @@ async def stripe_webhook(request: Request):
     return JSONResponse(status_code=200, content={"message": "ok"})
 
 ## ====================
-## TELEGRAM 
+## TELEGRAM BOT 1 - Acceso al canal
 ## ====================
 telegram_bot = telebot.TeleBot(TELEGRAM_TOKEN)
-# ... (Pega aquí tus funciones de Telegram intactas) ...
-# check_membership, get_main_menu, handlers, etc.
+
 def check_membership(user_id):
     clean_id = str(CHANNEL_ID).strip().replace("'", "").replace('"', "")
     if not clean_id.startswith("-100"): clean_id = "-100" + clean_id
@@ -150,18 +148,193 @@ def send_welcome(message):
     if check_membership(message.from_user.id):
         telegram_bot.reply_to(message, "✅ **Access Granted**", reply_markup=get_main_menu(), parse_mode="Markdown")
     else:
-        # User is NOT a member, show "Join Channel" button
         markup = InlineKeyboardMarkup()
-        # We use the CHANNEL_LINK variable you defined at the top of your script
         btn_join = InlineKeyboardButton("📢 Join Channel", url=CHANNEL_LINK)
         markup.add(btn_join)
-
         telegram_bot.reply_to(
             message, 
             "⛔ **Access Denied**\n\nYou must join the channel first to use this bot.", 
             reply_markup=markup,
             parse_mode="Markdown"
         )
+
+## ====================
+## TELEGRAM BOT 2 - MonkeyDescargar (Descargador de medios)
+## ====================
+monkey_bot = telebot.TeleBot(MONKEY_TELEGRAM_TOKEN)
+
+# Configuración de yt-dlp
+YDL_OPTS = {
+    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+    'outtmpl': 'downloads/%(id)s_%(autonumber)s.%(ext)s',
+    'quiet': True,
+    'noplaylist': False,
+    'writethumbnail': False,
+}
+
+# Instancia de instaloader (para posts públicos de IG)
+IL = instaloader.Instaloader(
+    download_videos=True,
+    download_video_thumbnails=False,
+    download_geotags=False,
+    download_comments=False,
+    save_metadata=False,
+    compress_json=False,
+    post_metadata_txt_pattern='',
+)
+
+def extraer_shortcode(url):
+    """Extrae el shortcode de una URL de Instagram."""
+    match = re.search(r'instagram\.com/(?:p|reel|reels)/([A-Za-z0-9_-]+)', url)
+    return match.group(1) if match else None
+
+def descargar_instagram(url):
+    """Descarga un post de Instagram usando instaloader."""
+    shortcode = extraer_shortcode(url)
+    if not shortcode:
+        print(f"❌ No se pudo extraer shortcode de: {url}")
+        return []
+    
+    print(f"📸 Usando instaloader para shortcode: {shortcode}")
+    carpeta_temp = "downloads/ig_temp"
+    if os.path.exists(carpeta_temp):
+        shutil.rmtree(carpeta_temp)
+    os.makedirs(carpeta_temp, exist_ok=True)
+    
+    try:
+        post = instaloader.Post.from_shortcode(IL.context, shortcode)
+        IL.dirname_pattern = carpeta_temp
+        IL.download_post(post, target="")
+        
+        archivos = []
+        for f in sorted(glob.glob(os.path.join(carpeta_temp, '*'))):
+            ext = f.lower()
+            if ext.endswith(('.jpg', '.jpeg', '.png', '.webp', '.mp4')):
+                destino = os.path.join('downloads', os.path.basename(f))
+                shutil.move(f, destino)
+                archivos.append(destino)
+                print(f"  ✅ {destino}")
+        
+        try: shutil.rmtree(carpeta_temp)
+        except: pass
+        return archivos
+    except Exception as e:
+        print(f"❌ Error con instaloader: {e}")
+        try: shutil.rmtree(carpeta_temp)
+        except: pass
+        return []
+
+def descargar_media(url):
+    """Descarga media con yt-dlp. Para Instagram usa instaloader como fallback."""
+    os.makedirs('downloads', exist_ok=True)
+    archivos_antes = set(glob.glob('downloads/*'))
+    
+    try:
+        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as e:
+        print(f"⚠️ yt-dlp error: {e}")
+        info = None
+    
+    archivos_despues = set(glob.glob('downloads/*'))
+    archivos_nuevos = sorted(archivos_despues - archivos_antes)
+    
+    # Fallback: si yt-dlp no descargó nada y es Instagram → instaloader
+    if not archivos_nuevos and 'instagram.com' in url.lower():
+        print("⚠️ yt-dlp falló con Instagram, usando instaloader...")
+        archivos_nuevos = descargar_instagram(url)
+    
+    return info, archivos_nuevos
+
+@monkey_bot.message_handler(func=lambda msg: True, content_types=['text'])
+def monkey_procesar_mensaje(message):
+    """Handler principal del bot descargador."""
+    texto = message.text.strip()
+    chat_id = message.chat.id
+    
+    redes_soportadas = ["youtube.com", "youtu.be", "tiktok.com", "instagram.com", "facebook.com", "fb.watch", "fb.gg"]
+    
+    if not any(red in texto.lower() for red in redes_soportadas):
+        return  # No es un link soportado, ignorar
+    
+    msg_espera = monkey_bot.reply_to(message, "⏳ Descargando en HD... dame un momento.")
+    
+    try:
+        info, archivos_nuevos = descargar_media(texto)
+        
+        print(f"\n🔍 ARCHIVOS DESCARGADOS: {archivos_nuevos}")
+        
+        if archivos_nuevos:
+            if len(archivos_nuevos) == 1:
+                # Un solo archivo
+                archivo = archivos_nuevos[0]
+                if archivo.lower().endswith('.mp4'):
+                    with open(archivo, 'rb') as f:
+                        monkey_bot.send_video(chat_id, f, supports_streaming=True)
+                else:
+                    with open(archivo, 'rb') as f:
+                        monkey_bot.send_photo(chat_id, f)
+            else:
+                # Múltiples archivos → media group (max 10 por lote)
+                for i in range(0, len(archivos_nuevos), 10):
+                    lote = archivos_nuevos[i:i+10]
+                    media_group = []
+                    for archivo in lote:
+                        if archivo.lower().endswith('.mp4'):
+                            media_group.append(InputMediaVideo(open(archivo, 'rb')))
+                        else:
+                            media_group.append(InputMediaPhoto(open(archivo, 'rb')))
+                    
+                    if len(media_group) == 1:
+                        # Telegram no acepta media_group con 1 elemento
+                        archivo = lote[0]
+                        if archivo.lower().endswith('.mp4'):
+                            with open(archivo, 'rb') as f:
+                                monkey_bot.send_video(chat_id, f, supports_streaming=True)
+                        else:
+                            with open(archivo, 'rb') as f:
+                                monkey_bot.send_photo(chat_id, f)
+                    else:
+                        try:
+                            monkey_bot.send_media_group(chat_id, media_group)
+                        except Exception as mg_err:
+                            print(f"⚠️ Error media_group, enviando uno por uno: {mg_err}")
+                            for archivo in lote:
+                                try:
+                                    if archivo.lower().endswith('.mp4'):
+                                        with open(archivo, 'rb') as f:
+                                            monkey_bot.send_video(chat_id, f)
+                                    else:
+                                        with open(archivo, 'rb') as f:
+                                            monkey_bot.send_photo(chat_id, f)
+                                except Exception as ind_err:
+                                    print(f"❌ Error enviando {archivo}: {ind_err}")
+            
+            # Limpiar archivos descargados
+            for arch in archivos_nuevos:
+                try: os.remove(arch)
+                except: pass
+            
+            # Borrar mensaje de "Descargando..."
+            try: monkey_bot.delete_message(chat_id, msg_espera.message_id)
+            except: pass
+        
+        else:
+            monkey_bot.edit_message_text(
+                "❌ No se pudo descargar el contenido. El post puede ser privado.",
+                chat_id, msg_espera.message_id
+            )
+    
+    except Exception as e:
+        error_msg = str(e)[:800]
+        try:
+            monkey_bot.edit_message_text(
+                f"❌ Error al descargar:\n`{error_msg}`",
+                chat_id, msg_espera.message_id,
+                parse_mode='Markdown'
+            )
+        except:
+            pass
 
 ## ====================
 ## DISCORD BOT
@@ -187,39 +360,26 @@ async def on_ready():
 @discord_client.event
 async def on_message(message):
     if message.author.bot: return
-    
-    # Limpiamos espacios extra
     raw_content = message.content.strip()
     
     if isinstance(message.channel, discord.DMChannel) and raw_content.lower().startswith("!link"):
         try:
-            # --- LOGICA FLEXIBLE DE EXTRACCIÓN ---
-            # Esto extrae el email sin importar si hay espacio o no después de !link
             email = raw_content[5:].strip() if not raw_content.lower().startswith("!link ") else raw_content[6:].strip()
-
             if not email or "@" not in email:
-                await message.channel.send("❌ Usa: `!link email@ejemplo.com` (asegúrate de incluir el email)")
+                await message.channel.send("❌ Usa: `!link email@ejemplo.com`")
                 return
 
-            # --- BÚSQUEDA ROBUSTA EN STRIPE ---
-            # Usamos .search() que es insensible a mayúsculas/minúsculas por defecto
-            # y mucho más confiable que .list()
             query = f"email:'{email}'"
             custs = await asyncio.to_thread(stripe.Customer.search, query=query, limit=1)
-            
             if not custs.data:
-                # Intento de rescate: a veces Stripe es raro, probamos forzando minúsculas
                 query_lower = f"email:'{email.lower()}'"
                 custs = await asyncio.to_thread(stripe.Customer.search, query=query_lower, limit=1)
-
             if not custs.data:
-                await message.channel.send(f"❌ No encontré al cliente `{email}` en Stripe. Revisa que sea el mismo correo de tu pago.")
+                await message.channel.send(f"❌ No encontré al cliente `{email}` en Stripe.")
                 return
             
-            # De aquí en adelante tu lógica de c_id, suscripción y roles...
             c_id = custs.data[0].id
             status, prod = await get_customer_subscription_data(c_id)
-            
             if status not in ACTIVE_STATUSES:
                 await message.channel.send("⚠️ Found account, but no active subscription.")
                 return
@@ -245,72 +405,52 @@ async def on_message(message):
             
             await message.channel.send("✅ Linked successfully!")
             if admin_log_channel: await admin_log_channel.send(f"🟢 Link: {message.author.mention} ({email})")
-            
         except Exception as e:
             print(f"Link Err: {e}")
             await message.channel.send("❌ Error.")
 
-@tasks.loop(minutes=10) # Aumentado a 10 min para reducir carga
+@tasks.loop(minutes=10)
 async def check_subscriptions():
-    print("🔄 Checking subscriptions (ASYNC FIXED)...")
+    print("🔄 Checking subscriptions...")
     if not guild: return
-    
     try:
         response = supabase.table(TABLE_NAME).select("*").neq("discord_user_id", "None").execute()
         user_active_map = {}
-
-        # 1. ACTUALIZAR CON STRIPE (Ahora con await para no bloquear)
         for row in response.data:
             c_id = row.get("stripe_customer_id")
             d_id = row.get("discord_user_id")
             current_db_status = row.get("subscription_status")
-
-            # AWAIT ES OBLIGATORIO AQUI
             real_status, prod_obj = await get_customer_subscription_data(c_id)
-            
-            if real_status is None: continue 
-
+            if real_status is None: continue
             if real_status != current_db_status:
                 supabase.table(TABLE_NAME).update({
                     "subscription_status": real_status,
                     "updated_at": discord.utils.utcnow().isoformat()
                 }).eq("stripe_customer_id", c_id).execute()
-
             if d_id not in user_active_map: user_active_map[d_id] = False
             if real_status in ACTIVE_STATUSES: user_active_map[d_id] = True
-            
-            # Pequeña pausa para dejar respirar a la CPU entre usuarios
             await asyncio.sleep(0.5)
 
-        # 2. PROCESAR ROLES
         processed_users = set()
         for row in response.data:
             d_id = row.get("discord_user_id")
             if d_id in processed_users: continue
             processed_users.add(d_id)
-
             member = guild.get_member(int(d_id))
             if not member: continue
-
             is_user_safe = user_active_map.get(d_id, False)
-
             if is_user_safe:
                 active_row = next((r for r in response.data if r["discord_user_id"] == d_id and r["subscription_status"] in ACTIVE_STATUSES), None)
                 if active_row:
-                    # AWAIT OBLIGATORIO TAMBIEN AQUI
                     _, prod_obj = await get_customer_subscription_data(active_row["stripe_customer_id"])
                     roles_to_add = calculate_roles_to_assign(prod_obj)
-                    
                     for rid in roles_to_add:
                         r = guild.get_role(rid)
                         if r and r not in member.roles:
                             await member.add_roles(r, reason="Sub Activa")
                             print(f"➕ Rol {r.name} a {member.display_name}")
-
             else:
-                if SAFE_MODE_NO_BAN:
-                    pass
-                else:
+                if not SAFE_MODE_NO_BAN:
                     roles_removed = []
                     for rid in MANAGED_ROLES:
                         r = guild.get_role(rid)
@@ -319,9 +459,7 @@ async def check_subscriptions():
                             roles_removed.append(r.name)
                     if roles_removed and admin_log_channel:
                         await admin_log_channel.send(f"🔴 **Baja:** {member.mention} perdió roles.")
-
             await asyncio.sleep(0.1)
-
     except Exception as e:
         print(f"Error Loop: {e}")
 
@@ -332,13 +470,36 @@ def start_fastapi():
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
 
-def start_telegram():
+def start_telegram_access():
+    """Hilo para el bot de acceso al canal."""
+    print("🤖 Telegram Bot 1 (Acceso) iniciado...")
     while True:
         try: telegram_bot.infinity_polling(skip_pending=True, timeout=90)
-        except: time.sleep(5)
+        except Exception as e:
+            print(f"⚠️ Telegram Bot 1 error: {e}")
+            time.sleep(5)
+
+def start_monkey_bot():
+    """Hilo para el bot descargador MonkeyDescargar."""
+    print("🐵 MonkeyDescargar Bot iniciado...")
+    while True:
+        try: monkey_bot.infinity_polling(skip_pending=True, timeout=90)
+        except Exception as e:
+            print(f"⚠️ MonkeyDescargar error: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
+    # FastAPI en hilo daemon
     threading.Thread(target=start_fastapi, daemon=True).start()
-    threading.Thread(target=start_telegram, daemon=True).start()
+    
+    # Telegram Bot 1 (acceso al canal) en hilo daemon
+    threading.Thread(target=start_telegram_access, daemon=True).start()
+    
+    # MonkeyDescargar Bot en hilo daemon
+    threading.Thread(target=start_monkey_bot, daemon=True).start()
+    
+    print("🚀 Todos los servicios iniciados")
+    
+    # Discord en el hilo principal
     try: discord_client.run(DISCORD_BOT_TOKEN)
     except: pass
