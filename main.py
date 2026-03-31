@@ -466,9 +466,16 @@ async def check_subscriptions():
 ## ====================
 ## RUNNERS
 ## ====================
-def start_fastapi():
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+def start_discord():
+    """Hilo para Discord con auto-reconnect."""
+    while True:
+        try:
+            print("🎮 Iniciando Discord Bot...")
+            discord_client.run(DISCORD_BOT_TOKEN)
+        except Exception as e:
+            print(f"⚠️ Discord Bot error: {e}")
+            print("🔄 Reconectando Discord en 10 segundos...")
+            time.sleep(10)
 
 def start_telegram_access():
     """Hilo para el bot de acceso al canal."""
@@ -489,8 +496,8 @@ def start_monkey_bot():
             time.sleep(5)
 
 if __name__ == "__main__":
-    # FastAPI en hilo daemon
-    threading.Thread(target=start_fastapi, daemon=True).start()
+    # Discord en hilo daemon (ya NO es el principal)
+    threading.Thread(target=start_discord, daemon=True).start()
     
     # Telegram Bot 1 (acceso al canal) en hilo daemon
     threading.Thread(target=start_telegram_access, daemon=True).start()
@@ -500,6 +507,6 @@ if __name__ == "__main__":
     
     print("🚀 Todos los servicios iniciados")
     
-    # Discord en el hilo principal
-    try: discord_client.run(DISCORD_BOT_TOKEN)
-    except: pass
+    # FastAPI en el HILO PRINCIPAL (Render monitorea este puerto)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
