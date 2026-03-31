@@ -163,13 +163,21 @@ def send_welcome(message):
 ## ====================
 monkey_bot = telebot.TeleBot(MONKEY_TELEGRAM_TOKEN)
 
-# Configuración de yt-dlp
+# Configuración de yt-dlp (optimizada para servidores/datacenter)
 YDL_OPTS = {
     'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
     'outtmpl': 'downloads/%(id)s_%(autonumber)s.%(ext)s',
     'quiet': True,
     'noplaylist': False,
     'writethumbnail': False,
+    'noprogress': True,
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+    },
+    'extractor_args': {'youtube': {'player_client': ['web']}},
+    'socket_timeout': 30,
+    'retries': 3,
 }
 
 # Instancia de instaloader (para posts públicos de IG)
@@ -228,23 +236,36 @@ def descargar_media(url):
     """Descarga media con yt-dlp. Para Instagram usa instaloader como fallback."""
     os.makedirs('downloads', exist_ok=True)
     archivos_antes = set(glob.glob('downloads/*'))
+    error_msg = None
     
     try:
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
             info = ydl.extract_info(url, download=True)
     except Exception as e:
-        print(f"⚠️ yt-dlp error: {e}")
+        error_msg = str(e)
+        print(f"⚠️ yt-dlp error: {error_msg}")
         info = None
     
     archivos_despues = set(glob.glob('downloads/*'))
     archivos_nuevos = sorted(archivos_despues - archivos_antes)
+    
+    # Si yt-dlp descargó algo pero no lo detectó el glob, buscar en info
+    if not archivos_nuevos and info:
+        archivo = info.get('filepath') or info.get('_filename') or info.get('filename')
+        if not archivo and 'requested_downloads' in info:
+            descargas = info.get('requested_downloads', [])
+            if descargas:
+                archivo = descargas[0].get('filepath') or descargas[0].get('_filename')
+        if archivo and os.path.exists(archivo):
+            archivos_nuevos.append(archivo)
+            print(f"✅ Encontrado vía info dict: {archivo}")
     
     # Fallback: si yt-dlp no descargó nada y es Instagram → instaloader
     if not archivos_nuevos and 'instagram.com' in url.lower():
         print("⚠️ yt-dlp falló con Instagram, usando instaloader...")
         archivos_nuevos = descargar_instagram(url)
     
-    return info, archivos_nuevos
+    return info, archivos_nuevos, error_msg
 
 @monkey_bot.message_handler(func=lambda msg: True, content_types=['text'])
 def monkey_procesar_mensaje(message):
@@ -260,9 +281,11 @@ def monkey_procesar_mensaje(message):
     msg_espera = monkey_bot.reply_to(message, "⏳ Descargando en HD... dame un momento.")
     
     try:
-        info, archivos_nuevos = descargar_media(texto)
+        info, archivos_nuevos, dl_error = descargar_media(texto)
         
         print(f"\n🔍 ARCHIVOS DESCARGADOS: {archivos_nuevos}")
+        if dl_error:
+            print(f"📛 ERROR DE DESCARGA: {dl_error}")
         
         if archivos_nuevos:
             if len(archivos_nuevos) == 1:
@@ -286,7 +309,6 @@ def monkey_procesar_mensaje(message):
                             media_group.append(InputMediaPhoto(open(archivo, 'rb')))
                     
                     if len(media_group) == 1:
-                        # Telegram no acepta media_group con 1 elemento
                         archivo = lote[0]
                         if archivo.lower().endswith('.mp4'):
                             with open(archivo, 'rb') as f:
@@ -320,10 +342,19 @@ def monkey_procesar_mensaje(message):
             except: pass
         
         else:
-            monkey_bot.edit_message_text(
-                "❌ No se pudo descargar el contenido. El post puede ser privado.",
-                chat_id, msg_espera.message_id
-            )
+            # Mostrar el error REAL al usuario
+            if dl_error:
+                short_err = dl_error[:300]
+                monkey_bot.edit_message_text(
+                    f"❌ Error al descargar:\n`{short_err}`",
+                    chat_id, msg_espera.message_id,
+                    parse_mode='Markdown'
+                )
+            else:
+                monkey_bot.edit_message_text(
+                    "❌ No se pudo descargar. El post puede ser privado o la plataforma bloqueó la descarga.",
+                    chat_id, msg_espera.message_id
+                )
     
     except Exception as e:
         error_msg = str(e)[:800]
