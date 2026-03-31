@@ -187,17 +187,40 @@ COOKIES_FILE = 'youtube_cookies.txt'
 
 if YT_COOKIES_B64:
     import base64
+    import json
     try:
-        cookie_data = base64.b64decode(YT_COOKIES_B64)
-        with open(COOKIES_FILE, 'wb') as f:
-            f.write(cookie_data)
+        cookie_data = base64.b64decode(YT_COOKIES_B64).decode('utf-8')
+        
+        # Verificar si es un JSON (formato de algunas extensiones de Chrome)
+        if cookie_data.strip().startswith('['):
+            cookies_json = json.loads(cookie_data)
+            with open(COOKIES_FILE, 'w', encoding='utf-8') as f:
+                f.write("# Netscape HTTP Cookie File\n")
+                f.write("# https://curl.haxx.se/rfc/cookie_spec.html\n")
+                f.write("# This is a generated file!  Do not edit.\n\n")
+                for c in cookies_json:
+                    domain = c.get('domain', '')
+                    include_subdomains = 'TRUE' if domain.startswith('.') else 'FALSE'
+                    path = c.get('path', '/')
+                    secure = 'TRUE' if c.get('secure', False) else 'FALSE'
+                    expiration = str(int(c.get('expirationDate', 0))) if 'expirationDate' in c else '0'
+                    name = c.get('name', '')
+                    value = c.get('value', '')
+                    # Evitar cookies vacías o corruptas
+                    if domain and name:
+                        f.write(f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n")
+            print(f"🍪 Cookies cargadas desde env y convertidas de JSON a Netscape ({len(cookies_json)} cookies)")
+        else:
+            with open(COOKIES_FILE, 'w', encoding='utf-8') as f:
+                f.write(cookie_data)
+            print("🍪 Cookies de YouTube cargadas desde env (formato texto RAW)")
+            
         YDL_OPTS['cookiefile'] = COOKIES_FILE
-        print(f"🍪 Cookies de YouTube cargadas desde env ({len(cookie_data)} bytes)")
     except Exception as e:
         print(f"⚠️ Error cargando cookies: {e}")
 elif os.path.exists(COOKIES_FILE):
     YDL_OPTS['cookiefile'] = COOKIES_FILE
-    print(f"🍪 Cookies de YouTube cargadas desde archivo")
+    print("🍪 Cookies de YouTube cargadas desde archivo local")
 else:
     print("⚠️ Sin cookies de YouTube. Los Shorts/videos pueden fallar desde datacenter IPs.")
 
