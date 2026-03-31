@@ -232,11 +232,41 @@ def descargar_instagram(url):
         except: pass
         return []
 
+def limpiar_url(url):
+    """Limpia y normaliza URLs para evitar bugs de yt-dlp."""
+    url = url.strip()
+    
+    # YouTube Shorts → formato watch?v= (yt-dlp a veces falla con /shorts/)
+    match = re.search(r'youtube\.com/shorts/([A-Za-z0-9_-]+)', url)
+    if match:
+        video_id = match.group(1)
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        print(f"🔄 Short convertido a: {url}")
+        return url
+    
+    # youtu.be/ID → también normalizar
+    match = re.search(r'youtu\.be/([A-Za-z0-9_-]+)', url)
+    if match:
+        video_id = match.group(1)
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        return url
+    
+    # Limpiar parámetros de tracking de Instagram (?igsh=, ?utm_source=, etc.)
+    if 'instagram.com' in url:
+        match = re.search(r'(https?://(?:www\.)?instagram\.com/(?:p|reel|reels)/[A-Za-z0-9_-]+/?)', url)
+        if match:
+            url = match.group(1)
+    
+    return url
+
 def descargar_media(url):
     """Descarga media con yt-dlp. Para Instagram usa instaloader como fallback."""
     os.makedirs('downloads', exist_ok=True)
     archivos_antes = set(glob.glob('downloads/*'))
     error_msg = None
+    
+    # Limpiar URL antes de pasarla a yt-dlp
+    url = limpiar_url(url)
     
     try:
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
