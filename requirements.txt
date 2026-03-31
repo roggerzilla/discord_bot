@@ -1,7 +1,9 @@
-pyTelegramBotAPI
 discord.py
 fastapi
-uvicorn
+uvicorn[standard]
 supabase
 stripe
 python-dotenv
+pyTelegramBotAPI
+yt-dlp
+instaloader
