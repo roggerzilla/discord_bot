@@ -163,6 +163,75 @@ def send_welcome(message):
 ## ====================
 monkey_bot = telebot.TeleBot(MONKEY_TELEGRAM_TOKEN)
 
+# =============================================
+# COOKIES HARDCODEADAS (Twitter/X y YouTube)
+# =============================================
+TWITTER_COOKIES_RAW = """# Netscape HTTP Cookie File
+# https://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
+
+.x.com	TRUE	/	TRUE	1810490352	guest_id_marketing	v1%3A177593035160676828
+.x.com	TRUE	/	TRUE	1810490352	guest_id_ads	v1%3A177593035160676828
+.x.com	TRUE	/	TRUE	1810490352	guest_id	v1%3A177593035160676828
+.x.com	TRUE	/	TRUE	1810490352	personalization_id	"v1_HWahJhSkq8QSBO7tRUbMaw=="
+.x.com	TRUE	/	TRUE	1775939352	gt	2043026088029257913
+.x.com	TRUE	/	FALSE	1810490352	__cuid	2faaaa98d11f4d509c0ecc751d9fa97c
+.x.com	TRUE	/	TRUE	1776535153	external_referer	padhuUp37zjgzgv1mFWxJ12Ozwit7owX|0|8e8t2xd8A2w%3D
+x.com	FALSE	/	FALSE	1791482363	g_state	{"i_l":0,"i_ll":1775930361857,"i_e":{"enable_itp_optimization":18},"i_et":1775930361857}
+.x.com	TRUE	/	TRUE	1776016764	att	1-2MA8eUGaasDYaUSeZehuZoy71OYNnByYUryIItWq
+.x.com	TRUE	/	TRUE	0	_twitter_sess	BAh7BiIKZmxhc2hJQzonQWN0aW9uQ29udHJvbGxlcjo6Rmxhc2g6OkZsYXNo%250ASGFzaHsABjoKQHVzZWR7AA%253D%253D--1164b91ac812d853b877e93ddb612b7471bebc74
+.x.com	TRUE	/	TRUE	1810490561	kdt	nFnnNsWvzF8gbFL4Wa5WZt7qpBe0KEWUzxHNssVR
+.x.com	TRUE	/	TRUE	1810490561	twid	"u=2043026939632300032"
+.x.com	TRUE	/	TRUE	1810490561	auth_token	80108308f474e5f985bcd38ece6324207266216f
+.x.com	TRUE	/	TRUE	1810490561	ct0	2963a1517c6751d87012522103fa8d174c0a87f295ae9005a47edb576183a4e38d51ff745c3fb03646e3b0a99bef784cb014fcdb11046e11f9f4d9b5c1979ebd3f56bcfb0bfa798ad02382ab6bc01870
+.x.com	TRUE	/	TRUE	1775933053	__cf_bm	IFzO8x.uEl0jgkZKgfR_.YyJ4zULeT1rvGiaMbxYCJ0-1775931253.0487516-1.0.1.1-23AFEOlfQth9FG0CMqLv4DK4ewyuKrXtBlj37uddHv1ypBRS_lRQ7vNoYgwd3raWKMbpnUe9jmZSAnvNvwwXrNjFM4yPE.sAwjXrvVv4i4ootkJRa1.cbfgSrn1AzkOn
+"""
+
+YOUTUBE_COOKIES_RAW = """# Netscape HTTP Cookie File
+# https://curl.haxx.se/rfc/cookie_spec.html
+# This is a generated file! Do not edit.
+
+.youtube.com	TRUE	/	TRUE	1809482486	LOGIN_INFO	AFmmF2swRQIhALjjNlYJ9LOhBAIoyVnE3DFAozgoDro6wZRdsYL527WWAiBZWYSm2Xdg4OncoMrqanoRW1uaPB-EbDWoS-PKCqr7TA:QUQ3MjNmeVhKaGpNd3V5RnRQc3k0QlNVcEE3dW9od0owVXpXR1IzVjBoVXdGR0ZoLWpaVmtsc2hINjN6OEtRYXlfNFA3bW5pV2d3UGdMUzhDbXBMaEVtSXR3bFh3YW9rbHpBYWZHNGExZlhtM19VRHR3eXRKVC1pS0JTUzdISVhzckJPQzdUZ0pnRDJrdGl6cjB3aF9KMUZFR2doZTNHZmR3
+.youtube.com	TRUE	/	TRUE	1810491797	PREF	f4=4000000&tz=America.Mexico_City
+.youtube.com	TRUE	/	TRUE	1791482342	__Secure-BUCKET	CL4G
+.youtube.com	TRUE	/	FALSE	1810491796	HSID	A6j_KIzwOuoRWzd6A
+.youtube.com	TRUE	/	TRUE	1810491796	SSID	AUBTpfFf4O51S6Tdu
+.youtube.com	TRUE	/	FALSE	1810491796	APISID	KTY1E6SqrSFfxIKb/AIMF4uXAgQAhZdqvR
+.youtube.com	TRUE	/	TRUE	1810491796	SAPISID	Ity3cS4K7q1j5aRS/AVSxqJ-fgI5dsd037
+.youtube.com	TRUE	/	TRUE	1810491796	__Secure-1PAPISID	Ity3cS4K7q1j5aRS/AVSxqJ-fgI5dsd037
+.youtube.com	TRUE	/	TRUE	1810491796	__Secure-3PAPISID	Ity3cS4K7q1j5aRS/AVSxqJ-fgI5dsd037
+.youtube.com	TRUE	/	TRUE	1807467553	__Secure-1PSIDTS	sidts-CjQBWhotCXxBwjbBMAmMKz6QvEM46yc8gdjCqVdMepZphxiL6sIgC3DC5oK2aLB7iu20LiTAEAA
+.youtube.com	TRUE	/	TRUE	1807467553	__Secure-3PSIDTS	sidts-CjQBWhotCXxBwjbBMAmMKz6QvEM46yc8gdjCqVdMepZphxiL6sIgC3DC5oK2aLB7iu20LiTAEAA
+.youtube.com	TRUE	/	FALSE	1810491796	SID	g.a0008wiNnftFjp7CxCTOruk65w3U7fKKyM0TUHkf0O2bU1Ir0vDKEFhFFSoKd4EuPd_ykJOaRAACgYKAbESARUSFQHGX2MiEzCV1hQhCHSxaoVjIVqZiRoVAUF8yKqUTZbTGJWikQaItL79ByEy0076
+.youtube.com	TRUE	/	TRUE	1810491796	__Secure-1PSID	g.a0008wiNnftFjp7CxCTOruk65w3U7fKKyM0TUHkf0O2bU1Ir0vDKPriIE4uaG7Rd7F8uqpvEjgACgYKAeYSARUSFQHGX2MiBrwVghmP_vE75sJ2sr3OoBoVAUF8yKqcJbQPTTdqluH66BoSs5SM0076
+.youtube.com	TRUE	/	TRUE	1810491796	__Secure-3PSID	g.a0008wiNnftFjp7CxCTOruk65w3U7fKKyM0TUHkf0O2bU1Ir0vDKAFjUeGddQWqtjVSBe1y-iwACgYKAdcSARUSFQHGX2MiiEEKB6_kRs4pcyvteLVdCxoVAUF8yKoYCZcdlImIKfrByQs-GAwo0076
+.youtube.com	TRUE	/	FALSE	1807467799	SIDCC	AKEyXzWWG3DqQcUgx4IFcCJfhE2Bz_zvEiH9MYdCarBzUTE85IcJTDVMs4kFaVdBbQwCaQpj
+.youtube.com	TRUE	/	TRUE	1807467799	__Secure-1PSIDCC	AKEyXzXfip5TX-II63-D5yeCPOxWluMqP5HnezitEr7rxbStb0X9CcOv0abPYx1j6rfW9Bfg
+.youtube.com	TRUE	/	TRUE	1807467799	__Secure-3PSIDCC	AKEyXzXStuCfwgwvGH6CdzOmER4_Jab5BVwHpMCvw9Eu_x0LE6Uzv6wxLQy7wEvPxEsoAhAW
+.youtube.com	TRUE	/	TRUE	1775932401	CONSISTENCY	AH5K9rbkocTODTtzvY3qPUkOBCjfLr7bSFmzJ11hZaE_b4wCXcQ0hWQf9wysJLSqZjpgL2PlM7OuNbfsV0dCa4Z2n_7hVZ7Pttnix3-00_TWJuokI7tSIHWPEm0
+.youtube.com	TRUE	/	TRUE	1791483796	VISITOR_INFO1_LIVE	Gf6X-O2rY0k
+.youtube.com	TRUE	/	TRUE	1791483796	VISITOR_PRIVACY_METADATA	CgJNWBIEGgAgQw%3D%3D
+.youtube.com	TRUE	/	TRUE	0	YSC	Aqjp37qTh1k
+.youtube.com	TRUE	/	TRUE	1791482342	__Secure-ROLLOUT_TOKEN	CNOD2MawkaSS8QEQoYLjwoXJkwMYi5WxibDmkwM%3D
+"""
+
+def _escribir_cookies(contenido, archivo):
+    """Escribe cookies a un archivo y verifica que se creó correctamente."""
+    try:
+        with open(archivo, 'w', encoding='utf-8') as f:
+            f.write(contenido)
+        ruta_abs = os.path.abspath(archivo)
+        size = os.path.getsize(ruta_abs)
+        print(f"🍪 Cookies escritas en {ruta_abs} ({size} bytes)")
+        return ruta_abs
+    except Exception as e:
+        print(f"⚠️ Error escribiendo cookies en {archivo}: {e}")
+        return None
+
+# Escribir archivos de cookies al iniciar
+TWITTER_COOKIES_FILE = _escribir_cookies(TWITTER_COOKIES_RAW.strip(), 'twitter_cookies.txt')
+YOUTUBE_COOKIES_FILE = _escribir_cookies(YOUTUBE_COOKIES_RAW.strip(), 'youtube_cookies.txt')
+
 # Configuración de yt-dlp (optimizada para servidores/datacenter)
 YDL_OPTS = {
     'format': (
@@ -182,80 +251,28 @@ YDL_OPTS = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
     },
-    'extractor_args': {'youtube': {'player_client': ['web']}},
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'web'],
+            'player_skip': ['webpage', 'configs'],
+        }
+    },
     'socket_timeout': 30,
     'retries': 3,
 }
 
+# Aplicar cookies de YouTube
+if YOUTUBE_COOKIES_FILE:
+    YDL_OPTS['cookiefile'] = YOUTUBE_COOKIES_FILE
+
 # Opciones específicas para X/Twitter
-# Twitter requiere cookies de sesión (guest tokens ya no funcionan)
 YDL_OPTS_TWITTER = {
     **YDL_OPTS,
     'format': 'best[ext=mp4]/best',
 }
-
-# --- Función helper para cargar cookies desde base64 env o archivo local ---
-import base64
-import json
-
-def _cargar_cookies_desde_env_o_archivo(env_var_name, archivo_local, nombre_plataforma):
-    """Carga cookies desde variable de entorno (base64) o archivo local.
-    Retorna la ruta al archivo de cookies o None."""
-    cookies_b64 = os.environ.get(env_var_name, '')
-    
-    if cookies_b64:
-        try:
-            cookie_data = base64.b64decode(cookies_b64).decode('utf-8')
-            
-            # Verificar si es JSON (formato de extensiones de Chrome)
-            if cookie_data.strip().startswith('['):
-                cookies_json = json.loads(cookie_data)
-                with open(archivo_local, 'w', encoding='utf-8') as f:
-                    f.write("# Netscape HTTP Cookie File\n")
-                    f.write("# https://curl.haxx.se/rfc/cookie_spec.html\n")
-                    f.write("# This is a generated file!  Do not edit.\n\n")
-                    for c in cookies_json:
-                        domain = c.get('domain', '')
-                        include_subdomains = 'TRUE' if domain.startswith('.') else 'FALSE'
-                        path = c.get('path', '/')
-                        secure = 'TRUE' if c.get('secure', False) else 'FALSE'
-                        expiration = str(int(c.get('expirationDate', 0))) if 'expirationDate' in c else '0'
-                        name = c.get('name', '')
-                        value = c.get('value', '')
-                        if domain and name:
-                            f.write(f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n")
-                print(f"🍪 {nombre_plataforma}: Cookies cargadas desde env (JSON→Netscape, {len(cookies_json)} cookies)")
-            else:
-                with open(archivo_local, 'w', encoding='utf-8') as f:
-                    f.write(cookie_data)
-                print(f"🍪 {nombre_plataforma}: Cookies cargadas desde env (texto RAW)")
-            
-            return archivo_local
-        except Exception as e:
-            print(f"⚠️ {nombre_plataforma}: Error cargando cookies desde env: {e}")
-            return None
-    elif os.path.exists(archivo_local):
-        print(f"🍪 {nombre_plataforma}: Cookies cargadas desde archivo local")
-        return archivo_local
-    else:
-        print(f"⚠️ {nombre_plataforma}: Sin cookies. Algunas descargas pueden fallar.")
-        return None
-
-# Cargar cookies de YouTube
-yt_cookies_path = _cargar_cookies_desde_env_o_archivo('YT_COOKIES_B64', 'youtube_cookies.txt', 'YouTube')
-if yt_cookies_path:
-    YDL_OPTS['cookiefile'] = yt_cookies_path
-
-# Cargar cookies de Twitter/X (OBLIGATORIO - guest tokens ya no funcionan)
-# Para obtener las cookies:
-# 1. Inicia sesión en x.com en tu navegador
-# 2. Usa la extensión "Get cookies.txt LOCALLY" 
-# 3. Exporta las cookies y codifícalas en base64
-# 4. Ponlas en la variable de entorno TWITTER_COOKIES_B64
-# O guarda el archivo como twitter_cookies.txt junto al script
-twitter_cookies_path = _cargar_cookies_desde_env_o_archivo('TWITTER_COOKIES_B64', 'twitter_cookies.txt', 'Twitter/X')
-if twitter_cookies_path:
-    YDL_OPTS_TWITTER['cookiefile'] = twitter_cookies_path
+# Aplicar cookies de Twitter (OBLIGATORIO - guest tokens ya no funcionan)
+if TWITTER_COOKIES_FILE:
+    YDL_OPTS_TWITTER['cookiefile'] = TWITTER_COOKIES_FILE
 
 # Instancia de instaloader (para posts públicos de IG)
 IL = instaloader.Instaloader(
