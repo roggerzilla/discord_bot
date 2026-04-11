@@ -165,12 +165,19 @@ monkey_bot = telebot.TeleBot(MONKEY_TELEGRAM_TOKEN)
 
 # Configuración de yt-dlp (optimizada para servidores/datacenter)
 YDL_OPTS = {
-    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+    'format': (
+        'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/'
+        'bestvideo[ext=mp4]+bestaudio[ext=m4a]/'
+        'bestvideo[height<=1080]+bestaudio/'
+        'bestvideo+bestaudio/'
+        'best[ext=mp4]/best'
+    ),
     'outtmpl': 'downloads/%(id)s_%(autonumber)s.%(ext)s',
     'quiet': True,
     'noplaylist': False,
     'writethumbnail': False,
     'noprogress': True,
+    'merge_output_format': 'mp4',
     'http_headers': {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -178,6 +185,12 @@ YDL_OPTS = {
     'extractor_args': {'youtube': {'player_client': ['web']}},
     'socket_timeout': 30,
     'retries': 3,
+}
+
+# Opciones específicas para X/Twitter (formato más simple, funciona mejor)
+YDL_OPTS_TWITTER = {
+    **YDL_OPTS,
+    'format': 'best[ext=mp4]/best',
 }
 
 # Cargar cookies de YouTube desde variable de entorno (base64)
@@ -303,43 +316,106 @@ def limpiar_url(url):
     
     return url
 
-def descargar_media(url):
+def detectar_plataforma(url):
+    """Detecta la plataforma de una URL."""
+    url_lower = url.lower()
+    if 'youtube.com' in url_lower or 'youtu.be' in url_lower:
+        return 'youtube'
+    elif 'instagram.com' in url_lower:
+        return 'instagram'
+    elif 'tiktok.com' in url_lower:
+        return 'tiktok'
+    elif 'x.com' in url_lower or 'twitter.com' in url_lower:
+        return 'twitter'
+    elif 'facebook.com' in url_lower or 'fb.watch' in url_lower or 'fb.gg' in url_lower:
+        return 'facebook'
+    return 'desconocida'
+
+def descargar_media(url, max_reintentos=2):
     """Descarga media con yt-dlp. Para Instagram usa instaloader como fallback."""
     os.makedirs('downloads', exist_ok=True)
-    archivos_antes = set(glob.glob('downloads/*'))
-    error_msg = None
     
     # Limpiar URL antes de pasarla a yt-dlp
     url = limpiar_url(url)
+    plataforma = detectar_plataforma(url)
     
-    try:
-        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except Exception as e:
-        error_msg = str(e)
-        print(f"⚠️ yt-dlp error: {error_msg}")
-        info = None
+    # Usar opciones específicas para Twitter/X
+    if plataforma == 'twitter':
+        opciones = YDL_OPTS_TWITTER
+    else:
+        opciones = YDL_OPTS
     
-    archivos_despues = set(glob.glob('downloads/*'))
-    archivos_nuevos = sorted(archivos_despues - archivos_antes)
+    print(f"🔗 Plataforma detectada: {plataforma}")
     
-    # Si yt-dlp descargó algo pero no lo detectó el glob, buscar en info
-    if not archivos_nuevos and info:
-        archivo = info.get('filepath') or info.get('_filename') or info.get('filename')
-        if not archivo and 'requested_downloads' in info:
-            descargas = info.get('requested_downloads', [])
-            if descargas:
-                archivo = descargas[0].get('filepath') or descargas[0].get('_filename')
-        if archivo and os.path.exists(archivo):
-            archivos_nuevos.append(archivo)
-            print(f"✅ Encontrado vía info dict: {archivo}")
+    error_msg = None
+    ultimo_error = None
     
-    # Fallback: si yt-dlp no descargó nada y es Instagram → instaloader
-    if not archivos_nuevos and 'instagram.com' in url.lower():
-        print("⚠️ yt-dlp falló con Instagram, usando instaloader...")
-        archivos_nuevos = descargar_instagram(url)
+    for intento in range(max_reintentos + 1):
+        archivos_antes = set(glob.glob('downloads/*'))
+        
+        try:
+            with yt_dlp.YoutubeDL(opciones) as ydl:
+                info = ydl.extract_info(url, download=True)
+            
+            archivos_despues = set(glob.glob('downloads/*'))
+            archivos_nuevos = sorted(archivos_despues - archivos_antes)
+            
+            # Si yt-dlp descargó algo pero no lo detectó el glob, buscar en info
+            if not archivos_nuevos and info:
+                archivo = info.get('filepath') or info.get('_filename') or info.get('filename')
+                if not archivo and 'requested_downloads' in info:
+                    descargas = info.get('requested_downloads', [])
+                    if descargas:
+                        archivo = descargas[0].get('filepath') or descargas[0].get('_filename')
+                if archivo and os.path.exists(archivo):
+                    archivos_nuevos.append(archivo)
+                    print(f"✅ Encontrado vía info dict: {archivo}")
+            
+            # Fallback: si yt-dlp no descargó nada y es Instagram → instaloader
+            if not archivos_nuevos and plataforma == 'instagram':
+                print("⚠️ yt-dlp no descargó archivos de Instagram, usando instaloader...")
+                archivos_nuevos = descargar_instagram(url)
+            
+            return info, archivos_nuevos, None
+        
+        except yt_dlp.utils.DownloadError as e:
+            ultimo_error = e
+            error_str = str(e).lower()
+            
+            # Si es error de formato (YouTube Shorts), intentar con formato más simple
+            if 'requested format is not available' in error_str:
+                print(f"⚠️ Formato no disponible, reintentando con formato simple...")
+                opciones = {**opciones, 'format': 'best[ext=mp4]/best'}
+                continue
+            
+            # Si es error de Instagram por login/privacidad, intentar con instaloader
+            if plataforma == 'instagram' and (
+                'empty media response' in error_str or
+                'not available to everyone' in error_str or
+                'login required' in error_str
+            ):
+                print("⚠️ Instagram requiere login en yt-dlp, probando con instaloader...")
+                archivos = descargar_instagram(url)
+                if archivos:
+                    return None, archivos, None
+            
+            # No reintentar para otros errores de descarga
+            return None, [], str(e)
+        
+        except (TimeoutError, ConnectionError, OSError) as e:
+            ultimo_error = e
+            if intento < max_reintentos:
+                espera = (intento + 1) * 3
+                print(f"⏳ Timeout/conexión fallida (intento {intento + 1}/{max_reintentos + 1}), "
+                      f"reintentando en {espera}s...")
+                time.sleep(espera)
+            else:
+                return None, [], str(e)
+        
+        except Exception as e:
+            return None, [], str(e)
     
-    return info, archivos_nuevos, error_msg
+    return None, [], str(ultimo_error) if ultimo_error else "Error desconocido"
 
 @monkey_bot.message_handler(func=lambda msg: True, content_types=['text'])
 def monkey_procesar_mensaje(message):
@@ -347,7 +423,14 @@ def monkey_procesar_mensaje(message):
     texto = message.text.strip()
     chat_id = message.chat.id
     
-    redes_soportadas = ["youtube.com", "youtu.be", "tiktok.com", "instagram.com", "facebook.com", "fb.watch", "fb.gg"]
+    # Lista de dominios soportados (ahora incluye X/Twitter)
+    redes_soportadas = [
+        "youtube.com", "youtu.be",
+        "tiktok.com",
+        "instagram.com",
+        "facebook.com", "fb.watch", "fb.gg",
+        "x.com", "twitter.com",
+    ]
     
     if not any(red in texto.lower() for red in redes_soportadas):
         return  # No es un link soportado, ignorar
@@ -357,14 +440,22 @@ def monkey_procesar_mensaje(message):
         monkey_bot.reply_to(message, "⚠️ Ese es un **Community Post** de YouTube (texto/imágenes), no un video. Solo puedo descargar videos, shorts y reels.", parse_mode='Markdown')
         return
     
-    msg_espera = monkey_bot.reply_to(message, "⏳ Descargando en HD... dame un momento.")
+    # Detectar plataforma para mensaje personalizado
+    plataforma = detectar_plataforma(texto)
+    emoji_plataforma = {
+        'youtube': '🎬', 'instagram': '📸', 'tiktok': '🎵',
+        'twitter': '🐦', 'facebook': '📘', 'desconocida': '🔗'
+    }
+    emoji = emoji_plataforma.get(plataforma, '🔗')
+    
+    msg_espera = monkey_bot.reply_to(message, f"{emoji} Monkey Descargando de {plataforma.capitalize()} en monkey HD... dame un monkey momento.")
     
     try:
         info, archivos_nuevos, dl_error = descargar_media(texto)
         
-        print(f"\n🔍 ARCHIVOS DESCARGADOS: {archivos_nuevos}")
+        print(f"\n🔍 MONKEY ARCHIVOS DESCARGADOS: {archivos_nuevos}")
         if dl_error:
-            print(f"📛 ERROR DE DESCARGA: {dl_error}")
+            print(f"📛 MONKEY ERROR DE DESCARGA: {dl_error}")
         
         if archivos_nuevos:
             if len(archivos_nuevos) == 1:
@@ -421,13 +512,32 @@ def monkey_procesar_mensaje(message):
             except: pass
         
         else:
-            # Mostrar el error REAL al usuario
+            # No se descargó nada - mostrar error amigable
             if dl_error:
-                short_err = dl_error[:300]
+                dl_lower = dl_error.lower()
+                if 'empty media response' in dl_lower or 'not available to everyone' in dl_lower:
+                    user_msg = (
+                        "❌ No se pudo descargar de Instagram.\n"
+                        "Este post parece ser privado o estar restringido.\n"
+                        "Solo puedo descargar contenido público."
+                    )
+                elif 'timeout' in dl_lower or 'connection' in dl_lower or 'timed out' in dl_lower:
+                    user_msg = (
+                        "❌ Error de conexión.\n"
+                        "El servidor tardó demasiado en responder.\n"
+                        "Intenta enviar el link de nuevo en unos minutos."
+                    )
+                elif 'requested format is not available' in dl_lower:
+                    user_msg = (
+                        "❌ No se pudo descargar en el formato solicitado.\n"
+                        "Intenta enviar el link de nuevo."
+                    )
+                else:
+                    short_err = dl_error[:300]
+                    user_msg = f"❌ Error al descargar:\n`{short_err}`"
+                
                 monkey_bot.edit_message_text(
-                    f"❌ Error al descargar:\n`{short_err}`",
-                    chat_id, msg_espera.message_id,
-                    parse_mode='Markdown'
+                    user_msg, chat_id, msg_espera.message_id, parse_mode='Markdown'
                 )
             else:
                 monkey_bot.edit_message_text(
@@ -557,7 +667,7 @@ async def check_subscriptions():
                     for rid in roles_to_add:
                         r = guild.get_role(rid)
                         if r and r not in member.roles:
-                            await member.add_roles(r, reason="Sub Activa")
+                            await mem.add_roles(r, reason="Sub Activa")
                             print(f"➕ Rol {r.name} a {member.display_name}")
             else:
                 if not SAFE_MODE_NO_BAN:
@@ -599,6 +709,7 @@ def start_telegram_access():
 def start_monkey_bot():
     """Hilo para el bot descargador MonkeyDescargar."""
     print("🐵 MonkeyDescargar Bot iniciado...")
+    print("📌 Plataformas soportadas: YouTube, TikTok, Instagram, Facebook, X/Twitter")
     while True:
         try: monkey_bot.infinity_polling(skip_pending=True, timeout=90)
         except Exception as e:
