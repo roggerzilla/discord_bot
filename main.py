@@ -187,55 +187,75 @@ YDL_OPTS = {
     'retries': 3,
 }
 
-# Opciones específicas para X/Twitter (formato más simple, funciona mejor)
+# Opciones específicas para X/Twitter
+# Twitter requiere cookies de sesión (guest tokens ya no funcionan)
 YDL_OPTS_TWITTER = {
     **YDL_OPTS,
     'format': 'best[ext=mp4]/best',
 }
 
-# Cargar cookies de YouTube desde variable de entorno (base64)
-# o desde archivo cookies.txt en el directorio del script
-YT_COOKIES_B64 = os.environ.get('YT_COOKIES_B64', '')
-COOKIES_FILE = 'youtube_cookies.txt'
+# --- Función helper para cargar cookies desde base64 env o archivo local ---
+import base64
+import json
 
-if YT_COOKIES_B64:
-    import base64
-    import json
-    try:
-        cookie_data = base64.b64decode(YT_COOKIES_B64).decode('utf-8')
-        
-        # Verificar si es un JSON (formato de algunas extensiones de Chrome)
-        if cookie_data.strip().startswith('['):
-            cookies_json = json.loads(cookie_data)
-            with open(COOKIES_FILE, 'w', encoding='utf-8') as f:
-                f.write("# Netscape HTTP Cookie File\n")
-                f.write("# https://curl.haxx.se/rfc/cookie_spec.html\n")
-                f.write("# This is a generated file!  Do not edit.\n\n")
-                for c in cookies_json:
-                    domain = c.get('domain', '')
-                    include_subdomains = 'TRUE' if domain.startswith('.') else 'FALSE'
-                    path = c.get('path', '/')
-                    secure = 'TRUE' if c.get('secure', False) else 'FALSE'
-                    expiration = str(int(c.get('expirationDate', 0))) if 'expirationDate' in c else '0'
-                    name = c.get('name', '')
-                    value = c.get('value', '')
-                    # Evitar cookies vacías o corruptas
-                    if domain and name:
-                        f.write(f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n")
-            print(f"🍪 Cookies cargadas desde env y convertidas de JSON a Netscape ({len(cookies_json)} cookies)")
-        else:
-            with open(COOKIES_FILE, 'w', encoding='utf-8') as f:
-                f.write(cookie_data)
-            print("🍪 Cookies de YouTube cargadas desde env (formato texto RAW)")
+def _cargar_cookies_desde_env_o_archivo(env_var_name, archivo_local, nombre_plataforma):
+    """Carga cookies desde variable de entorno (base64) o archivo local.
+    Retorna la ruta al archivo de cookies o None."""
+    cookies_b64 = os.environ.get(env_var_name, '')
+    
+    if cookies_b64:
+        try:
+            cookie_data = base64.b64decode(cookies_b64).decode('utf-8')
             
-        YDL_OPTS['cookiefile'] = COOKIES_FILE
-    except Exception as e:
-        print(f"⚠️ Error cargando cookies: {e}")
-elif os.path.exists(COOKIES_FILE):
-    YDL_OPTS['cookiefile'] = COOKIES_FILE
-    print("🍪 Cookies de YouTube cargadas desde archivo local")
-else:
-    print("⚠️ Sin cookies de YouTube. Los Shorts/videos pueden fallar desde datacenter IPs.")
+            # Verificar si es JSON (formato de extensiones de Chrome)
+            if cookie_data.strip().startswith('['):
+                cookies_json = json.loads(cookie_data)
+                with open(archivo_local, 'w', encoding='utf-8') as f:
+                    f.write("# Netscape HTTP Cookie File\n")
+                    f.write("# https://curl.haxx.se/rfc/cookie_spec.html\n")
+                    f.write("# This is a generated file!  Do not edit.\n\n")
+                    for c in cookies_json:
+                        domain = c.get('domain', '')
+                        include_subdomains = 'TRUE' if domain.startswith('.') else 'FALSE'
+                        path = c.get('path', '/')
+                        secure = 'TRUE' if c.get('secure', False) else 'FALSE'
+                        expiration = str(int(c.get('expirationDate', 0))) if 'expirationDate' in c else '0'
+                        name = c.get('name', '')
+                        value = c.get('value', '')
+                        if domain and name:
+                            f.write(f"{domain}\t{include_subdomains}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n")
+                print(f"🍪 {nombre_plataforma}: Cookies cargadas desde env (JSON→Netscape, {len(cookies_json)} cookies)")
+            else:
+                with open(archivo_local, 'w', encoding='utf-8') as f:
+                    f.write(cookie_data)
+                print(f"🍪 {nombre_plataforma}: Cookies cargadas desde env (texto RAW)")
+            
+            return archivo_local
+        except Exception as e:
+            print(f"⚠️ {nombre_plataforma}: Error cargando cookies desde env: {e}")
+            return None
+    elif os.path.exists(archivo_local):
+        print(f"🍪 {nombre_plataforma}: Cookies cargadas desde archivo local")
+        return archivo_local
+    else:
+        print(f"⚠️ {nombre_plataforma}: Sin cookies. Algunas descargas pueden fallar.")
+        return None
+
+# Cargar cookies de YouTube
+yt_cookies_path = _cargar_cookies_desde_env_o_archivo('YT_COOKIES_B64', 'youtube_cookies.txt', 'YouTube')
+if yt_cookies_path:
+    YDL_OPTS['cookiefile'] = yt_cookies_path
+
+# Cargar cookies de Twitter/X (OBLIGATORIO - guest tokens ya no funcionan)
+# Para obtener las cookies:
+# 1. Inicia sesión en x.com en tu navegador
+# 2. Usa la extensión "Get cookies.txt LOCALLY" 
+# 3. Exporta las cookies y codifícalas en base64
+# 4. Ponlas en la variable de entorno TWITTER_COOKIES_B64
+# O guarda el archivo como twitter_cookies.txt junto al script
+twitter_cookies_path = _cargar_cookies_desde_env_o_archivo('TWITTER_COOKIES_B64', 'twitter_cookies.txt', 'Twitter/X')
+if twitter_cookies_path:
+    YDL_OPTS_TWITTER['cookiefile'] = twitter_cookies_path
 
 # Instancia de instaloader (para posts públicos de IG)
 IL = instaloader.Instaloader(
@@ -382,11 +402,19 @@ def descargar_media(url, max_reintentos=2):
             ultimo_error = e
             error_str = str(e).lower()
             
-            # Si es error de formato (YouTube Shorts), intentar con formato más simple
+            # Si es error de formato (YouTube Shorts), intentar con formatos cada vez más simples
             if 'requested format is not available' in error_str:
-                print(f"⚠️ Formato no disponible, reintentando con formato simple...")
-                opciones = {**opciones, 'format': 'best[ext=mp4]/best'}
-                continue
+                if intento == 0:
+                    print(f"⚠️ Formato no disponible, reintentando con best[ext=mp4]/best...")
+                    opciones = {**opciones, 'format': 'best[ext=mp4]/best'}
+                    continue
+                else:
+                    # Último recurso: formato 'best' sin merge_output_format
+                    print(f"⚠️ Sigue fallando, reintentando con formato 'best' puro...")
+                    opciones_simple = {**opciones, 'format': 'best'}
+                    opciones_simple.pop('merge_output_format', None)
+                    opciones = opciones_simple
+                    continue
             
             # Si es error de Instagram por login/privacidad, intentar con instaloader
             if plataforma == 'instagram' and (
@@ -521,6 +549,11 @@ def monkey_procesar_mensaje(message):
                         "Este post parece ser privado o estar restringido.\n"
                         "Solo puedo descargar contenido público."
                     )
+                elif 'bad guest token' in dl_lower or ('twitter' in dl_lower and 'api' in dl_lower):
+                    user_msg = (
+                        "❌ Twitter/X requiere autenticación para descargar.\n"
+                        "El administrador necesita configurar las cookies de Twitter."
+                    )
                 elif 'timeout' in dl_lower or 'connection' in dl_lower or 'timed out' in dl_lower:
                     user_msg = (
                         "❌ Error de conexión.\n"
@@ -529,8 +562,8 @@ def monkey_procesar_mensaje(message):
                     )
                 elif 'requested format is not available' in dl_lower:
                     user_msg = (
-                        "❌ No se pudo descargar en el formato solicitado.\n"
-                        "Intenta enviar el link de nuevo."
+                        "❌ No se pudo descargar este video en ningún formato disponible.\n"
+                        "Puede ser una restricción regional o del contenido."
                     )
                 else:
                     short_err = dl_error[:300]
