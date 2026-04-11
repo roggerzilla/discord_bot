@@ -253,7 +253,7 @@ YDL_OPTS = {
     },
     'extractor_args': {
         'youtube': {
-            'player_client': ['android', 'web'],
+            'player_client': ['web', 'ios', 'tv'],
             'player_skip': ['webpage', 'configs'],
         }
     },
