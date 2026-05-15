@@ -17,6 +17,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo
 import yt_dlp
 import instaloader
+import urllib3
 
 load_dotenv()
 
@@ -291,7 +292,7 @@ def extraer_shortcode(url):
     return match.group(1) if match else None
 
 def descargar_instagram(url):
-    """Descarga un post de Instagram usando instaloader."""
+    """Descarga un post de Instagram usando instaloader (videos e imágenes de carrusel)."""
     shortcode = extraer_shortcode(url)
     if not shortcode:
         print(f"❌ No se pudo extraer shortcode de: {url}")
@@ -320,8 +321,19 @@ def descargar_instagram(url):
         try: shutil.rmtree(carpeta_temp)
         except: pass
         return archivos
+    except instaloader.exceptions.InstaloaderException as e:
+        error_str = str(e).lower()
+        if 'login' in error_str or 'private' in error_str:
+            print(f"❌ Instagram requiere login o es privado: {e}")
+        elif 'not found' in error_str or '404' in error_str:
+            print(f"❌ Post de Instagram no encontrado: {e}")
+        else:
+            print(f"❌ Error de instaloader: {e}")
+        try: shutil.rmtree(carpeta_temp)
+        except: pass
+        return []
     except Exception as e:
-        print(f"❌ Error con instaloader: {e}")
+        print(f"❌ Error inesperado con instaloader: {e}")
         try: shutil.rmtree(carpeta_temp)
         except: pass
         return []
@@ -433,13 +445,14 @@ def descargar_media(url, max_reintentos=2):
                     opciones = opciones_simple
                     continue
             
-            # Si es error de Instagram por login/privacidad, intentar con instaloader
+            # Si es error de Instagram por login/privacidad/carrusel, intentar con instaloader
             if plataforma == 'instagram' and (
                 'empty media response' in error_str or
                 'not available to everyone' in error_str or
-                'login required' in error_str
+                'login required' in error_str or
+                'no video in this post' in error_str
             ):
-                print("⚠️ Instagram requiere login en yt-dlp, probando con instaloader...")
+                print("⚠️ Instagram requiere instaloader (carrusel/privacidad), descargando...")
                 archivos = descargar_instagram(url)
                 if archivos:
                     return None, archivos, None
@@ -447,7 +460,11 @@ def descargar_media(url, max_reintentos=2):
             # No reintentar para otros errores de descarga
             return None, [], str(e)
         
-        except (TimeoutError, ConnectionError, OSError) as e:
+        except (TimeoutError, ConnectionError, OSError,
+                urllib3.exceptions.TimeoutError,
+                urllib3.exceptions.ProtocolError,
+                urllib3.exceptions.ReadTimeoutError,
+                urllib3.exceptions.ConnectTimeoutError) as e:
             ultimo_error = e
             if intento < max_reintentos:
                 espera = (intento + 1) * 3
@@ -483,6 +500,11 @@ def monkey_procesar_mensaje(message):
     # YouTube Community Posts no son videos, yt-dlp no los soporta
     if re.search(r'youtube\.com/post/', texto.lower()):
         monkey_bot.reply_to(message, "⚠️ Ese es un **Community Post** de YouTube (texto/imágenes), no un video. Solo puedo descargar videos, shorts y reels.", parse_mode='Markdown')
+        return
+    
+    # TikTok photo/slideshow posts no son soportados por yt-dlp
+    if 'tiktok.com' in texto.lower() and '/photo/' in texto.lower():
+        monkey_bot.reply_to(message, "⚠️ Las **fotos/slideshows de TikTok** no son compatibles con el bot. Solo puedo descargar videos de TikTok.", parse_mode='Markdown')
         return
     
     # Detectar plataforma para mensaje personalizado
@@ -566,10 +588,21 @@ def monkey_procesar_mensaje(message):
                         "Este post parece ser privado o estar restringido.\n"
                         "Solo puedo descargar contenido público."
                     )
+                elif 'no video in this post' in dl_lower:
+                    user_msg = (
+                        "❌ No se pudo descargar de Instagram.\n"
+                        "Este post parece ser solo imágenes (carrusel) sin video.\n"
+                        "Intentando con instaloader..."
+                    )
                 elif 'bad guest token' in dl_lower or ('twitter' in dl_lower and 'api' in dl_lower):
                     user_msg = (
                         "❌ Twitter/X requiere autenticación para descargar.\n"
                         "El administrador necesita configurar las cookies de Twitter."
+                    )
+                elif 'unsupported url' in dl_lower and 'tiktok' in dl_lower:
+                    user_msg = (
+                        "❌ Esta URL de TikTok no es compatible.\n"
+                        "Solo puedo descargar videos de TikTok, no fotos/slideshows."
                     )
                 elif 'timeout' in dl_lower or 'connection' in dl_lower or 'timed out' in dl_lower:
                     user_msg = (
