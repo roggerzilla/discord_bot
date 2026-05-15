@@ -322,6 +322,8 @@ def descargar_instagram(url):
         return []
     
     print(f"📸 Usando instaloader para shortcode: {shortcode}")
+    print(f"📸 Login instaloader activo: {IL.context.is_logged_in}")
+    
     carpeta_temp = "downloads/ig_temp"
     if os.path.exists(carpeta_temp):
         shutil.rmtree(carpeta_temp)
@@ -329,6 +331,7 @@ def descargar_instagram(url):
     
     try:
         post = instaloader.Post.from_shortcode(IL.context, shortcode)
+        print(f"📸 Post encontrado: is_video={post.is_video}, mediacount={post.mediacount}")
         IL.dirname_pattern = carpeta_temp
         IL.download_post(post, target="")
         
@@ -343,6 +346,7 @@ def descargar_instagram(url):
         
         try: shutil.rmtree(carpeta_temp)
         except: pass
+        print(f"📸 Instaloader descargó {len(archivos)} archivos")
         return archivos
     except instaloader.exceptions.InstaloaderException as e:
         error_str = str(e).lower()
@@ -356,7 +360,7 @@ def descargar_instagram(url):
         except: pass
         return []
     except Exception as e:
-        print(f"❌ Error inesperado con instaloader: {e}")
+        print(f"❌ Error inesperado con instaloader: {type(e).__name__}: {e}")
         try: shutil.rmtree(carpeta_temp)
         except: pass
         return []
@@ -475,9 +479,11 @@ def descargar_media(url, max_reintentos=2):
                 'empty media response' in error_str or
                 'not available to everyone' in error_str or
                 'login required' in error_str or
-                'no video in this post' in error_str
+                'no video in this post' in error_str or
+                'no video formats found' in error_str
             ):
                 print("⚠️ Instagram requiere instaloader (carrusel/privacidad), descargando...")
+                print(f"⚠️ Error yt-dlp original: {str(e)[:200]}")
                 archivos = descargar_instagram(url)
                 if archivos:
                     return None, archivos, None
@@ -819,6 +825,8 @@ def start_telegram_access():
         try: telegram_bot.infinity_polling(skip_pending=True, timeout=90)
         except Exception as e:
             print(f"⚠️ Telegram Bot 1 error: {e}")
+            try: telegram_bot.stop_polling()
+            except: pass
             time.sleep(5)
 
 def start_monkey_bot():
@@ -829,6 +837,8 @@ def start_monkey_bot():
         try: monkey_bot.infinity_polling(skip_pending=True, timeout=90)
         except Exception as e:
             print(f"⚠️ MonkeyDescargar error: {e}")
+            try: monkey_bot.stop_polling()
+            except: pass
             time.sleep(5)
 
 if __name__ == "__main__":
