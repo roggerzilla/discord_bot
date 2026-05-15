@@ -71,6 +71,11 @@ telegram_links = {
 # Telegram Config (Bot descargador - MonkeyDescargar)
 MONKEY_TELEGRAM_TOKEN = os.environ.get('MONKEY_TELEGRAM_TOKEN', '8716244791:AAEdLg6RTfdNljLb3UreC9k9wauUk-1te0o')
 
+# Instagram Config (para contenido NSFW/restringido)
+IG_USERNAME = os.environ.get('IG_USERNAME', '')
+IG_PASSWORD = os.environ.get('IG_PASSWORD', '')
+IG_COOKIES_RAW = os.environ.get('IG_COOKIES', '')
+
 ## ====================
 ## HELPER STRIPE (ASÍNCRONO - SOLUCIÓN AL CRASH)
 ## ====================
@@ -232,6 +237,7 @@ def _escribir_cookies(contenido, archivo):
 # Escribir archivos de cookies al iniciar
 TWITTER_COOKIES_FILE = _escribir_cookies(TWITTER_COOKIES_RAW.strip(), 'twitter_cookies.txt')
 YOUTUBE_COOKIES_FILE = _escribir_cookies(YOUTUBE_COOKIES_RAW.strip(), 'youtube_cookies.txt')
+IG_COOKIES_FILE = _escribir_cookies(IG_COOKIES_RAW.strip(), 'instagram_cookies.txt') if IG_COOKIES_RAW.strip() else None
 
 # Configuración de yt-dlp (optimizada para servidores/datacenter)
 YDL_OPTS = {
@@ -275,6 +281,14 @@ YDL_OPTS_TWITTER = {
 if TWITTER_COOKIES_FILE:
     YDL_OPTS_TWITTER['cookiefile'] = TWITTER_COOKIES_FILE
 
+# Opciones específicas para Instagram (NSFW requiere autenticación)
+YDL_OPTS_INSTAGRAM = {
+    **YDL_OPTS,
+    'format': 'best[ext=mp4]/best',
+}
+if IG_COOKIES_FILE:
+    YDL_OPTS_INSTAGRAM['cookiefile'] = IG_COOKIES_FILE
+
 # Instancia de instaloader (para posts públicos de IG)
 IL = instaloader.Instaloader(
     download_videos=True,
@@ -285,6 +299,15 @@ IL = instaloader.Instaloader(
     compress_json=False,
     post_metadata_txt_pattern='',
 )
+
+# Login de instaloader si hay credenciales de Instagram
+if IG_USERNAME and IG_PASSWORD:
+    try:
+        IL.login(IG_USERNAME, IG_PASSWORD)
+        print(f"✅ Instagram: instaloader logueado como {IG_USERNAME}")
+    except Exception as e:
+        print(f"⚠️ Instagram: no se pudo hacer login con instaloader: {e}")
+        print("  → Se usarán cookies para yt-dlp como fallback")
 
 def extraer_shortcode(url):
     """Extrae el shortcode de una URL de Instagram."""
@@ -388,9 +411,11 @@ def descargar_media(url, max_reintentos=2):
     url = limpiar_url(url)
     plataforma = detectar_plataforma(url)
     
-    # Usar opciones específicas para Twitter/X
+    # Usar opciones específicas por plataforma
     if plataforma == 'twitter':
         opciones = YDL_OPTS_TWITTER
+    elif plataforma == 'instagram':
+        opciones = YDL_OPTS_INSTAGRAM
     else:
         opciones = YDL_OPTS
     
@@ -583,11 +608,18 @@ def monkey_procesar_mensaje(message):
             if dl_error:
                 dl_lower = dl_error.lower()
                 if 'empty media response' in dl_lower or 'not available to everyone' in dl_lower:
-                    user_msg = (
-                        "❌ No se pudo descargar de Instagram.\n"
-                        "Este post parece ser privado o estar restringido.\n"
-                        "Solo puedo descargar contenido público."
-                    )
+                    if not IG_USERNAME and not IG_COOKIES_RAW:
+                        user_msg = (
+                            "❌ Instagram requiere autenticación para este contenido.\n"
+                            "El post puede ser NSFW o estar restringido.\n"
+                            "El administrador debe configurar IG_USERNAME/IG_PASSWORD o IG_COOKIES."
+                        )
+                    else:
+                        user_msg = (
+                            "❌ No se pudo descargar de Instagram.\n"
+                            "El post parece ser privado o la sesión expiró.\n"
+                            "Verifica que las credenciales de Instagram sean válidas."
+                        )
                 elif 'no video in this post' in dl_lower:
                     user_msg = (
                         "❌ No se pudo descargar de Instagram.\n"
