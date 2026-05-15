@@ -487,6 +487,7 @@ def descargar_media(url, max_reintentos=2):
                 archivos = descargar_instagram(url)
                 if archivos:
                     return None, archivos, None
+                return None, [], f"Instagram: yt-dlp falló ('{str(e)[:100]}') e instaloader tampoco pudo descargar. Verifica las credenciales IG."
             
             # No reintentar para otros errores de descarga
             return None, [], str(e)
