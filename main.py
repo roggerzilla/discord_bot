@@ -822,25 +822,31 @@ def start_discord():
 def start_telegram_access():
     """Hilo para el bot de acceso al canal."""
     print("🤖 Telegram Bot 1 (Acceso) iniciado...")
-    while True:
-        try: telegram_bot.infinity_polling(skip_pending=True, timeout=90)
-        except Exception as e:
-            print(f"⚠️ Telegram Bot 1 error: {e}")
-            try: telegram_bot.stop_polling()
-            except: pass
-            time.sleep(5)
+    try:
+        telegram_bot.infinity_polling(skip_pending=True, timeout=90)
+    except Exception as e:
+        print(f"⚠️ Telegram Bot 1 error: {e}")
+        try:
+            telegram_bot.stop_polling()
+        except:
+            pass
+        time.sleep(10)
+        start_telegram_access()
 
 def start_monkey_bot():
     """Hilo para el bot descargador MonkeyDescargar."""
     print("🐵 MonkeyDescargar Bot iniciado...")
     print("📌 Plataformas soportadas: YouTube, TikTok, Instagram, Facebook, X/Twitter")
-    while True:
-        try: monkey_bot.infinity_polling(skip_pending=True, timeout=90)
-        except Exception as e:
-            print(f"⚠️ MonkeyDescargar error: {e}")
-            try: monkey_bot.stop_polling()
-            except: pass
-            time.sleep(5)
+    try:
+        monkey_bot.infinity_polling(skip_pending=True, timeout=90)
+    except Exception as e:
+        print(f"⚠️ MonkeyDescargar error: {e}")
+        try:
+            monkey_bot.stop_polling()
+        except:
+            pass
+        time.sleep(10)
+        start_monkey_bot()
 
 if __name__ == "__main__":
     # Discord en hilo daemon (ya NO es el principal)
