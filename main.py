@@ -498,6 +498,15 @@ def descargar_media(url, max_reintentos=2):
                 urllib3.exceptions.ReadTimeoutError,
                 urllib3.exceptions.ConnectTimeoutError) as e:
             ultimo_error = e
+            
+            # Si es Instagram y falló por timeout/conexión, intentar instaloader antes de reintentar
+            if plataforma == 'instagram':
+                print(f"⚠️ Timeout/Conexión fallida con yt-dlp para Instagram, probando instaloader...")
+                archivos = descargar_instagram(url)
+                if archivos:
+                    return None, archivos, None
+                print("⚠️ instaloader también falló tras el timeout.")
+
             if intento < max_reintentos:
                 espera = (intento + 1) * 3
                 print(f"⏳ Timeout/conexión fallida (intento {intento + 1}/{max_reintentos + 1}), "
@@ -614,24 +623,23 @@ def monkey_procesar_mensaje(message):
             # No se descargó nada - mostrar error amigable
             if dl_error:
                 dl_lower = dl_error.lower()
-                if 'empty media response' in dl_lower or 'not available to everyone' in dl_lower:
+                if 'empty media response' in dl_lower or 'not available to everyone' in dl_lower or 'login required' in dl_lower:
                     if not IG_USERNAME and not IG_COOKIES_RAW:
                         user_msg = (
-                            "❌ Instagram requiere autenticación para este contenido.\n"
-                            "El post puede ser NSFW o estar restringido.\n"
-                            "El administrador debe configurar IG_USERNAME/IG_PASSWORD o IG_COOKIES."
+                            "❌ **Contenido Restringido en Instagram**\n\n"
+                            "Este post requiere inicio de sesión para verse (NSFW o restricción de edad).\n"
+                            "El administrador debe configurar las credenciales de Instagram (`IG_COOKIES` o `IG_USERNAME`)."
                         )
                     else:
                         user_msg = (
-                            "❌ No se pudo descargar de Instagram.\n"
-                            "El post parece ser privado o la sesión expiró.\n"
-                            "Verifica que las credenciales de Instagram sean válidas."
+                            "❌ **Error de Autenticación en Instagram**\n\n"
+                            "Las credenciales actuales de Instagram parecen haber expirado o no tienen acceso a este contenido.\n"
+                            "Por favor, actualiza las cookies (`IG_COOKIES`) en las variables de entorno."
                         )
-                elif 'no video in this post' in dl_lower:
+                elif 'no video in this post' in dl_lower or 'no video formats found' in dl_lower:
                     user_msg = (
-                        "❌ No se pudo descargar de Instagram.\n"
-                        "Este post parece ser solo imágenes (carrusel) sin video.\n"
-                        "Intentando con instaloader..."
+                        "❌ **No se encontró video en Instagram**\n\n"
+                        "Este post parece contener solo imágenes o un formato no compatible."
                     )
                 elif 'bad guest token' in dl_lower or ('twitter' in dl_lower and 'api' in dl_lower):
                     user_msg = (
