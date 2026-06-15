@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 import asyncio
 import threading
 import time
+import signal
+import sys
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo
 import yt_dlp
@@ -814,8 +816,25 @@ async def check_subscriptions():
         print(f"Error Loop: {e}")
 
 ## ====================
-## RUNNERS
+## RUNNERS & SIGNAL HANDLING
 ## ====================
+def graceful_shutdown(signum, frame):
+    """Detiene los bots de forma limpia al recibir señales del sistema (SIGTERM/SIGINT)."""
+    print(f"\n🛑 Señal {signum} recibida. Deteniendo servicios...")
+    try:
+        telegram_bot.stop_polling()
+        monkey_bot.stop_polling()
+        # Para Discord no hay una forma directa de stop_polling en cliente síncrono,
+        # pero al ser hilos daemon se cerrarán al terminar el proceso principal.
+    except:
+        pass
+    print("👋 Servicios detenidos. Saliendo...")
+    sys.exit(0)
+
+# Registrar señales de terminación (importante para Render/Docker)
+signal.signal(signal.SIGTERM, graceful_shutdown)
+signal.signal(signal.SIGINT, graceful_shutdown)
+
 def start_discord():
     """Hilo para Discord con auto-reconnect."""
     while True:
@@ -824,40 +843,40 @@ def start_discord():
             discord_client.run(DISCORD_BOT_TOKEN)
         except Exception as e:
             print(f"⚠️ Discord Bot error: {e}")
-            print("🔄 Reconectando Discord en 10 segundos...")
             time.sleep(10)
 
 def start_telegram_access():
     """Hilo para el bot de acceso al canal."""
-    print("🤖 Telegram Bot 1 (Acceso) iniciado...")
-    try:
-        telegram_bot.infinity_polling(skip_pending=True, timeout=90)
-    except Exception as e:
-        print(f"⚠️ Telegram Bot 1 error: {e}")
+    while True:
         try:
-            telegram_bot.stop_polling()
-        except:
-            pass
-        time.sleep(10)
-        start_telegram_access()
+            print("🤖 Telegram Bot 1 (Acceso) iniciado...")
+            telegram_bot.infinity_polling(skip_pending=True, timeout=90)
+        except Exception as e:
+            err_msg = str(e)
+            print(f"⚠️ Telegram Bot 1 error: {err_msg}")
+            if "Conflict" in err_msg:
+                print("🚨 Conflicto detectado (409). Esperando 20s para reintentar...")
+                time.sleep(20)
+            else:
+                time.sleep(5)
 
 def start_monkey_bot():
     """Hilo para el bot descargador MonkeyDescargar."""
-    print("🐵 MonkeyDescargar Bot iniciado...")
-    print("📌 Plataformas soportadas: YouTube, TikTok, Instagram, Facebook, X/Twitter")
-    try:
-        monkey_bot.infinity_polling(skip_pending=True, timeout=90)
-    except Exception as e:
-        print(f"⚠️ MonkeyDescargar error: {e}")
+    while True:
         try:
-            monkey_bot.stop_polling()
-        except:
-            pass
-        time.sleep(10)
-        start_monkey_bot()
+            print("🐵 MonkeyDescargar Bot iniciado...")
+            monkey_bot.infinity_polling(skip_pending=True, timeout=90)
+        except Exception as e:
+            err_msg = str(e)
+            print(f"⚠️ MonkeyDescargar error: {err_msg}")
+            if "Conflict" in err_msg:
+                print("🚨 Conflicto detectado (409). Esperando 20s para reintentar...")
+                time.sleep(20)
+            else:
+                time.sleep(5)
 
 if __name__ == "__main__":
-    # Discord en hilo daemon (ya NO es el principal)
+    # Discord en hilo daemon
     threading.Thread(target=start_discord, daemon=True).start()
     
     # Telegram Bot 1 (acceso al canal) en hilo daemon
