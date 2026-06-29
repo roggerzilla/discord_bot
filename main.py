@@ -291,6 +291,18 @@ YDL_OPTS_INSTAGRAM = {
 if IG_COOKIES_FILE:
     YDL_OPTS_INSTAGRAM['cookiefile'] = IG_COOKIES_FILE
 
+# Opciones específicas para TikTok (acepta videos + imágenes de carrusel)
+YDL_OPTS_TIKTOK = {
+    **YDL_OPTS,
+    'format': 'best/bestvideo+bestaudio',
+    'extractor_args': {
+        'tiktok': {
+            'api_hostname': 'api22-normal-c-useast2a.tiktokv.com',
+            'app_version': '34.5.4',
+        }
+    },
+}
+
 # Instancia de instaloader (para posts públicos de IG)
 IL = instaloader.Instaloader(
     download_videos=True,
@@ -317,11 +329,19 @@ def extraer_shortcode(url):
     return match.group(1) if match else None
 
 def descargar_instagram(url):
-    """Descarga un post de Instagram usando instaloader (videos e imágenes de carrusel)."""
+    """Descarga un post de Instagram usando instaloader (videos e imágenes de carrusel).
+
+    Retorna (archivos, error_code):
+      - (lista, None) en éxito (lista vacía = no se descargó nada, error_code='empty')
+      - ([], 'bad_url') si la URL no tiene shortcode
+      - ([], 'login_required') si el post es privado y no hay login
+      - ([], 'not_found') si el post no existe
+      - ([], 'other: <msg>') en otros errores
+    """
     shortcode = extraer_shortcode(url)
     if not shortcode:
         print(f"❌ No se pudo extraer shortcode de: {url}")
-        return []
+        return [], "bad_url"
     
     print(f"📸 Usando instaloader para shortcode: {shortcode}")
     print(f"📸 Login instaloader activo: {IL.context.is_logged_in}")
@@ -348,24 +368,32 @@ def descargar_instagram(url):
         
         try: shutil.rmtree(carpeta_temp)
         except: pass
-        print(f"📸 Instaloader descargó {len(archivos)} archivos")
-        return archivos
+        
+        if archivos:
+            print(f"📸 Instaloader descargó {len(archivos)} archivos")
+            return archivos, None
+        else:
+            print(f"❌ Instaloader no descargó archivos del post")
+            return [], "empty"
     except instaloader.exceptions.InstaloaderException as e:
         error_str = str(e).lower()
         if 'login' in error_str or 'private' in error_str:
             print(f"❌ Instagram requiere login o es privado: {e}")
+            err_code = "login_required"
         elif 'not found' in error_str or '404' in error_str:
             print(f"❌ Post de Instagram no encontrado: {e}")
+            err_code = "not_found"
         else:
             print(f"❌ Error de instaloader: {e}")
+            err_code = f"other: {str(e)[:100]}"
         try: shutil.rmtree(carpeta_temp)
         except: pass
-        return []
+        return [], err_code
     except Exception as e:
         print(f"❌ Error inesperado con instaloader: {type(e).__name__}: {e}")
         try: shutil.rmtree(carpeta_temp)
         except: pass
-        return []
+        return [], f"other: {type(e).__name__}: {str(e)[:100]}"
 
 def limpiar_url(url):
     """Limpia y normaliza URLs para evitar bugs de yt-dlp."""
@@ -410,24 +438,36 @@ def detectar_plataforma(url):
     return 'desconocida'
 
 def descargar_media(url, max_reintentos=2):
-    """Descarga media con yt-dlp. Para Instagram usa instaloader como fallback."""
+    """Descarga media con yt-dlp. Para Instagram usa instaloader como primario."""
     os.makedirs('downloads', exist_ok=True)
     
     # Limpiar URL antes de pasarla a yt-dlp
     url = limpiar_url(url)
     plataforma = detectar_plataforma(url)
     
+    print(f"🔗 Plataforma detectada: {plataforma}")
+    
+    # Instagram: instaloader es PRIMARIO (maneja mejor carruseles, posts públicos sin auth)
+    if plataforma == 'instagram':
+        print("📸 Instagram: instaloader (primario)...")
+        archivos_inst, err_inst = descargar_instagram(url)
+        if archivos_inst:
+            return None, archivos_inst, None
+        if err_inst == "not_found":
+            return None, [], "Instagram: post no encontrado o eliminado"
+        # Cualquier otro fallo → fallback a yt-dlp (que sí tiene cookies vía cookiefile)
+        print(f"⚠️ instaloader no pudo ({err_inst}), fallback a yt-dlp con cookies...")
+    
     # Usar opciones específicas por plataforma
     if plataforma == 'twitter':
         opciones = YDL_OPTS_TWITTER
     elif plataforma == 'instagram':
         opciones = YDL_OPTS_INSTAGRAM
+    elif plataforma == 'tiktok':
+        opciones = YDL_OPTS_TIKTOK
     else:
         opciones = YDL_OPTS
     
-    print(f"🔗 Plataforma detectada: {plataforma}")
-    
-    error_msg = None
     ultimo_error = None
     
     for intento in range(max_reintentos + 1):
@@ -451,11 +491,6 @@ def descargar_media(url, max_reintentos=2):
                     archivos_nuevos.append(archivo)
                     print(f"✅ Encontrado vía info dict: {archivo}")
             
-            # Fallback: si yt-dlp no descargó nada y es Instagram → instaloader
-            if not archivos_nuevos and plataforma == 'instagram':
-                print("⚠️ yt-dlp no descargó archivos de Instagram, usando instaloader...")
-                archivos_nuevos = descargar_instagram(url)
-            
             return info, archivos_nuevos, None
         
         except yt_dlp.utils.DownloadError as e:
@@ -476,20 +511,18 @@ def descargar_media(url, max_reintentos=2):
                     opciones = opciones_simple
                     continue
             
-            # Si es error de Instagram por login/privacidad/carrusel, intentar con instaloader
-            if plataforma == 'instagram' and (
-                'empty media response' in error_str or
-                'not available to everyone' in error_str or
-                'login required' in error_str or
-                'no video in this post' in error_str or
-                'no video formats found' in error_str
-            ):
-                print("⚠️ Instagram requiere instaloader (carrusel/privacidad), descargando...")
-                print(f"⚠️ Error yt-dlp original: {str(e)[:200]}")
-                archivos = descargar_instagram(url)
-                if archivos:
-                    return None, archivos, None
-                return None, [], f"Instagram: yt-dlp falló ('{str(e)[:100]}') e instaloader tampoco pudo descargar. Verifica las credenciales IG."
+            # Instagram: si yt-dlp falló por restricción y NO hay login instaloader,
+            # reintentar una vez con force_generic=True
+            if (plataforma == 'instagram'
+                and 'not available to everyone' in error_str
+                and not IL.context.is_logged_in
+                and intento < max_reintentos):
+                print("⚠️ Reintentando yt-dlp con force_generic=True (sin login instaloader)...")
+                opciones = {
+                    **opciones,
+                    'extractor_args': {'instagram': {'force_generic': True}},
+                }
+                continue
             
             # No reintentar para otros errores de descarga
             return None, [], str(e)
@@ -501,14 +534,6 @@ def descargar_media(url, max_reintentos=2):
                 urllib3.exceptions.ConnectTimeoutError) as e:
             ultimo_error = e
             
-            # Si es Instagram y falló por timeout/conexión, intentar instaloader antes de reintentar
-            if plataforma == 'instagram':
-                print(f"⚠️ Timeout/Conexión fallida con yt-dlp para Instagram, probando instaloader...")
-                archivos = descargar_instagram(url)
-                if archivos:
-                    return None, archivos, None
-                print("⚠️ instaloader también falló tras el timeout.")
-
             if intento < max_reintentos:
                 espera = (intento + 1) * 3
                 print(f"⏳ Timeout/conexión fallida (intento {intento + 1}/{max_reintentos + 1}), "
@@ -521,6 +546,73 @@ def descargar_media(url, max_reintentos=2):
             return None, [], str(e)
     
     return None, [], str(ultimo_error) if ultimo_error else "Error desconocido"
+
+# URL de un reel público conocida para testear credenciales sin riesgo
+IG_TEST_URL = "https://www.instagram.com/reel/C8aRs6CJvSD/"  # Reel público de Instagram
+
+@monkey_bot.message_handler(commands=['testig', 'test_ig'])
+def monkey_test_ig(message):
+    """Diagnostica el estado de las credenciales de Instagram."""
+    chat_id = message.chat.id
+    msg = monkey_bot.reply_to(message, "🔍 Diagnosticando credenciales de Instagram...")
+    
+    lineas = []
+    lineas.append("🔍 **Diagnóstico de Instagram**\n")
+    
+    # 1) Cookies
+    if IG_COOKIES_RAW:
+        lineas.append(f"✅ `IG_COOKIES` configurado ({len(IG_COOKIES_RAW)} chars)")
+        if IG_COOKIES_FILE and os.path.exists(IG_COOKIES_FILE):
+            size = os.path.getsize(IG_COOKIES_FILE)
+            lineas.append(f"✅ Archivo `instagram_cookies.txt` existe ({size} bytes)")
+        else:
+            lineas.append("❌ Archivo `instagram_cookies.txt` no se pudo escribir")
+    else:
+        lineas.append("❌ `IG_COOKIES` NO configurado")
+    
+    # 2) Usuario/contraseña
+    if IG_USERNAME and IG_PASSWORD:
+        lineas.append(f"✅ `IG_USERNAME` = `{IG_USERNAME[:3]}***` configurado")
+        if IL.context.is_logged_in:
+            lineas.append(f"✅ instaloader logueado como `{IL.context.username}`")
+        else:
+            lineas.append("❌ instaloader NO está logueado (login falló: 2FA o credenciales inválidas)")
+    else:
+        lineas.append("❌ `IG_USERNAME`/`IG_PASSWORD` NO configurados")
+    
+    # 3) Test funcional: intentar descargar un reel público
+    lineas.append("\n🧪 **Test funcional** (descargando reel público de prueba)...")
+    try:
+        info, archivos, err = descargar_media(IG_TEST_URL, max_reintentos=0)
+        if archivos:
+            for arch in archivos:
+                try: os.remove(arch)
+                except: pass
+            lineas.append("✅ Reel público descargado correctamente")
+            lineas.append("   → yt-dlp e instaloader funcionan con la config actual")
+        elif err:
+            err_low = err.lower()
+            if 'not available to everyone' in err_low:
+                lineas.append("❌ El test falló con `not available to everyone`")
+                lineas.append("   → La cuenta/cookies no satisfacen los requisitos del post")
+                if not (IG_USERNAME and IG_PASSWORD):
+                    lineas.append("   → Solución: configura `IG_USERNAME`/`IG_PASSWORD` con una cuenta con edad verificada")
+                else:
+                    lineas.append("   → Solución: usa una cuenta IG con más privilegios o que siga al autor")
+            elif 'login required' in err_low:
+                lineas.append("❌ El test falló: Instagram requiere login")
+                lineas.append("   → Las cookies no tienen `sessionid` válido o expiró")
+            else:
+                lineas.append(f"❌ El test falló: `{err[:150]}`")
+        else:
+            lineas.append("❌ El test no descargó nada (sin error explícito)")
+    except Exception as e:
+        lineas.append(f"❌ Excepción durante el test: `{str(e)[:150]}`")
+    
+    try:
+        monkey_bot.edit_message_text("\n".join(lineas), chat_id, msg.message_id, parse_mode='Markdown')
+    except Exception:
+        monkey_bot.edit_message_text("\n".join(lineas).replace('*', '').replace('`', ''), chat_id, msg.message_id)
 
 @monkey_bot.message_handler(func=lambda msg: True, content_types=['text'])
 def monkey_procesar_mensaje(message):
@@ -543,11 +635,6 @@ def monkey_procesar_mensaje(message):
     # YouTube Community Posts no son videos, yt-dlp no los soporta
     if re.search(r'youtube\.com/post/', texto.lower()):
         monkey_bot.reply_to(message, "⚠️ Ese es un **Community Post** de YouTube (texto/imágenes), no un video. Solo puedo descargar videos, shorts y reels.", parse_mode='Markdown')
-        return
-    
-    # TikTok photo/slideshow posts no son soportados por yt-dlp
-    if 'tiktok.com' in texto.lower() and '/photo/' in texto.lower():
-        monkey_bot.reply_to(message, "⚠️ Las **fotos/slideshows de TikTok** no son compatibles con el bot. Solo puedo descargar videos de TikTok.", parse_mode='Markdown')
         return
     
     # Detectar plataforma para mensaje personalizado
@@ -630,19 +717,38 @@ def monkey_procesar_mensaje(message):
                         user_msg = (
                             "❌ **Contenido Restringido en Instagram**\n\n"
                             "Este post requiere inicio de sesión para verse (NSFW o restricción de edad).\n"
-                            "El administrador debe configurar las credenciales de Instagram (`IG_COOKIES` o `IG_USERNAME`)."
+                            "El administrador debe configurar las credenciales de Instagram (`IG_COOKIES` o `IG_USERNAME`).\n\n"
+                            "Usa /testig para verificar el estado de las credenciales."
+                        )
+                    elif 'not available to everyone' in dl_lower and IL.context.is_logged_in:
+                        user_msg = (
+                            "❌ **Tu cuenta de Instagram no tiene acceso a este post**\n\n"
+                            "El bot está autenticado correctamente, pero la cuenta configurada no cumple los requisitos para ver este contenido:\n"
+                            "• El post puede ser de una cuenta que la cuenta IG no sigue\n"
+                            "• El post puede tener restricción de edad/región que la cuenta IG no supera\n\n"
+                            "Configura una cuenta con edad verificada en `IG_USERNAME`/`IG_PASSWORD`."
                         )
                     else:
                         user_msg = (
                             "❌ **Error de Autenticación en Instagram**\n\n"
-                            "Las credenciales actuales de Instagram parecen haber expirado o no tienen acceso a este contenido.\n"
-                            "Por favor, actualiza las cookies (`IG_COOKIES`) en las variables de entorno."
+                            "Las credenciales actuales de Instagram parecen haber expirado o son inválidas.\n"
+                            "Por favor, actualiza las cookies (`IG_COOKIES`) y verifica `IG_USERNAME`/`IG_PASSWORD`.\n\n"
+                            "Usa /testig para diagnosticar el estado de las credenciales."
                         )
                 elif 'no video in this post' in dl_lower or 'no video formats found' in dl_lower:
-                    user_msg = (
-                        "❌ **No se encontró video en Instagram**\n\n"
-                        "Este post parece contener solo imágenes o un formato no compatible."
-                    )
+                    if plataforma == 'instagram':
+                        user_msg = (
+                            "❌ **No se encontró video en el post de Instagram**\n\n"
+                            "Este post parece contener solo imágenes o un formato no compatible. "
+                            "Si es un carrusel público, debería haberse descargado automáticamente. "
+                            "Si no fue así, el post puede ser privado o las credenciales/cookies no tienen acceso."
+                        )
+                    else:
+                        user_msg = (
+                            "❌ **No se encontró video en este post**\n\n"
+                            "La URL apunta a un post que no contiene videos descargables "
+                            "(puede ser un carrusel de imágenes o un formato no soportado por esta plataforma)."
+                        )
                 elif 'bad guest token' in dl_lower or ('twitter' in dl_lower and 'api' in dl_lower):
                     user_msg = (
                         "❌ Twitter/X requiere autenticación para descargar.\n"
@@ -651,7 +757,7 @@ def monkey_procesar_mensaje(message):
                 elif 'unsupported url' in dl_lower and 'tiktok' in dl_lower:
                     user_msg = (
                         "❌ Esta URL de TikTok no es compatible.\n"
-                        "Solo puedo descargar videos de TikTok, no fotos/slideshows."
+                        "Verifica que el link sea válido y que el post no haya sido eliminado."
                     )
                 elif 'timeout' in dl_lower or 'connection' in dl_lower or 'timed out' in dl_lower:
                     user_msg = (
