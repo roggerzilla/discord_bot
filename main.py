@@ -286,7 +286,8 @@ if TWITTER_COOKIES_FILE:
 # Opciones específicas para Instagram (NSFW requiere autenticación)
 YDL_OPTS_INSTAGRAM = {
     **YDL_OPTS,
-    'format': 'best[ext=mp4]/best',
+    # Acepta video O imagen: un carrusel solo de fotos no puede usar best[ext=mp4]
+    'format': 'best/bestvideo+bestaudio',
 }
 if IG_COOKIES_FILE:
     YDL_OPTS_INSTAGRAM['cookiefile'] = IG_COOKIES_FILE
