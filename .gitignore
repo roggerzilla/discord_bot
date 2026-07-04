@@ -2,3 +2,7 @@
 ".env" 
 .env
 *.env
+__pycache__/
+*.pyc
+downloads/
+*_cookies.txt
