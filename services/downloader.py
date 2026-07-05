@@ -9,6 +9,7 @@ import glob
 import shutil
 import time
 
+import requests
 import yt_dlp
 import instaloader
 import urllib3
@@ -181,14 +182,8 @@ if IG_USERNAME and IG_PASSWORD:
         print("  → Se usarán cookies para yt-dlp como fallback")
 
 
-def _cargar_sesion_instaloader_desde_cookies():
-    """Carga la sesión de instaloader desde IG_COOKIES cuando no hay login por
-    usuario/contraseña. Sin sesión, Instagram responde 401 a instaloader y los
-    carruseles fallan aunque las cookies sí estén configuradas (solo las usaba
-    yt-dlp, que no soporta carruseles de imágenes)."""
-    if IL.context.is_logged_in or not IG_COOKIES_RAW.strip():
-        return
-
+def _cookies_instagram_dict():
+    """Parsea IG_COOKIES (formato Netscape) a un dict {nombre: valor}."""
     cookies = {}
     for linea in IG_COOKIES_RAW.splitlines():
         linea = linea.strip()
@@ -197,6 +192,18 @@ def _cargar_sesion_instaloader_desde_cookies():
         partes = linea.split('\t')
         if len(partes) >= 7 and 'instagram' in partes[0]:
             cookies[partes[5]] = partes[6]
+    return cookies
+
+
+def _cargar_sesion_instaloader_desde_cookies():
+    """Carga la sesión de instaloader desde IG_COOKIES cuando no hay login por
+    usuario/contraseña. Sin sesión, Instagram responde 401 a instaloader y los
+    carruseles fallan aunque las cookies sí estén configuradas (solo las usaba
+    yt-dlp, que no soporta carruseles de imágenes)."""
+    if IL.context.is_logged_in or not IG_COOKIES_RAW.strip():
+        return
+
+    cookies = _cookies_instagram_dict()
 
     if 'sessionid' not in cookies:
         print("⚠️ Instagram: IG_COOKIES no contiene 'sessionid'; instaloader seguirá anónimo")
@@ -224,6 +231,114 @@ def extraer_shortcode(url):
     """Extrae el shortcode de una URL de Instagram."""
     match = re.search(r'instagram\.com/(?:p|reel|reels)/([A-Za-z0-9_-]+)', url)
     return match.group(1) if match else None
+
+
+# =============================================
+# INSTAGRAM VÍA API WEB (primario si hay cookies)
+# =============================================
+IG_APP_ID = '936619743392459'
+IG_UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+         '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
+_SHORTCODE_ALFABETO = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+
+
+def _shortcode_a_pk(shortcode):
+    """Convierte un shortcode de Instagram a su pk numérico (base 64).
+    En shortcodes largos (posts privados) solo los primeros 11 chars codifican el pk."""
+    pk = 0
+    for c in shortcode[:11]:
+        pk = pk * 64 + _SHORTCODE_ALFABETO.index(c)
+    return pk
+
+
+def descargar_instagram_api(url):
+    """Descarga un post/carrusel de Instagram con la API web oficial usando
+    las cookies de IG_COOKIES. Es el mismo endpoint que usa yt-dlp cuando hay
+    sessionid, pero a diferencia de yt-dlp también descarga las FOTOS de los
+    carruseles (yt-dlp solo extrae videos).
+
+    Retorna (archivos, error_code) igual que descargar_instagram()."""
+    shortcode = extraer_shortcode(url)
+    if not shortcode:
+        return [], "bad_url"
+
+    cookies = _cookies_instagram_dict()
+    if 'sessionid' not in cookies:
+        return [], "no_cookies"
+
+    headers = {
+        'User-Agent': IG_UA,
+        'Accept': '*/*',
+        'X-IG-App-ID': IG_APP_ID,
+        'X-Requested-With': 'XMLHttpRequest',
+        'Referer': 'https://www.instagram.com/',
+    }
+
+    pk = _shortcode_a_pk(shortcode)
+    print(f"📸 API web de Instagram: shortcode={shortcode} pk={pk}")
+
+    try:
+        r = requests.get(
+            f'https://i.instagram.com/api/v1/media/{pk}/info/',
+            headers=headers, cookies=cookies, timeout=30,
+        )
+    except Exception as e:
+        print(f"❌ API IG: error de conexión: {e}")
+        return [], f"other: {str(e)[:100]}"
+
+    if r.status_code in (401, 403):
+        print(f"❌ API IG: HTTP {r.status_code} (sessionid expirado o sin acceso)")
+        return [], "login_required"
+    if r.status_code == 404:
+        return [], "not_found"
+    if r.status_code != 200:
+        print(f"❌ API IG: HTTP {r.status_code}: {r.text[:150]}")
+        return [], f"other: http {r.status_code}"
+
+    try:
+        items = r.json().get('items') or []
+    except ValueError:
+        print(f"❌ API IG: respuesta no es JSON: {r.text[:150]}")
+        return [], "other: respuesta invalida"
+    if not items:
+        return [], "empty"
+
+    item = items[0]
+    # Carrusel → lista de medias; post simple → el item mismo
+    medias = item.get('carousel_media') or [item]
+    print(f"📸 API IG: {len(medias)} media(s) en el post")
+
+    os.makedirs('downloads', exist_ok=True)
+    archivos = []
+    for i, media in enumerate(medias, 1):
+        videos = media.get('video_versions') or []
+        if videos:
+            media_url, ext = videos[0].get('url'), 'mp4'
+        else:
+            candidatos = (media.get('image_versions2') or {}).get('candidates') or []
+            if not candidatos:
+                continue
+            # candidates viene ordenado de mayor a menor resolución
+            media_url, ext = candidatos[0].get('url'), 'jpg'
+        if not media_url:
+            continue
+
+        destino = os.path.join('downloads', f'ig_{shortcode}_{i}.{ext}')
+        try:
+            with requests.get(media_url, headers={'User-Agent': IG_UA},
+                              stream=True, timeout=120) as resp:
+                resp.raise_for_status()
+                with open(destino, 'wb') as f:
+                    for chunk in resp.iter_content(256 * 1024):
+                        f.write(chunk)
+            archivos.append(destino)
+            print(f"  ✅ {destino}")
+        except Exception as e:
+            print(f"  ❌ No se pudo bajar media {i}: {e}")
+
+    if archivos:
+        return archivos, None
+    return [], "empty"
 
 
 def descargar_instagram(url):
@@ -354,9 +469,17 @@ def descargar_media(url, max_reintentos=2):
 
     print(f"🔗 Plataforma detectada: {plataforma}")
 
-    # Instagram: instaloader es PRIMARIO (maneja mejor carruseles, posts públicos sin auth)
+    # Instagram: 1) API web con cookies (baja fotos Y videos de carruseles),
+    # 2) instaloader, 3) yt-dlp (solo videos)
     if plataforma == 'instagram':
-        print("📸 Instagram: instaloader (primario)...")
+        print("📸 Instagram: API web con cookies (primario)...")
+        archivos_api, err_api = descargar_instagram_api(url)
+        if archivos_api:
+            return None, archivos_api, None
+        # OJO: la API devuelve 404 también cuando el sessionid expiró, así que
+        # su "not_found" no es confiable → siempre probar los fallbacks
+        print(f"⚠️ API web no pudo ({err_api}), intentando instaloader...")
+
         archivos_inst, err_inst = descargar_instagram(url)
         if archivos_inst:
             return None, archivos_inst, None
