@@ -120,6 +120,7 @@ YDL_OPTS = {
     },
     'socket_timeout': 30,
     'retries': 3,
+    'fragment_retries': 5,
 }
 
 # Aplicar cookies de YouTube
@@ -178,6 +179,42 @@ if IG_USERNAME and IG_PASSWORD:
     except Exception as e:
         print(f"⚠️ Instagram: no se pudo hacer login con instaloader: {e}")
         print("  → Se usarán cookies para yt-dlp como fallback")
+
+
+def _cargar_sesion_instaloader_desde_cookies():
+    """Carga la sesión de instaloader desde IG_COOKIES cuando no hay login por
+    usuario/contraseña. Sin sesión, Instagram responde 401 a instaloader y los
+    carruseles fallan aunque las cookies sí estén configuradas (solo las usaba
+    yt-dlp, que no soporta carruseles de imágenes)."""
+    if IL.context.is_logged_in or not IG_COOKIES_RAW.strip():
+        return
+
+    cookies = {}
+    for linea in IG_COOKIES_RAW.splitlines():
+        linea = linea.strip()
+        if not linea or linea.startswith('#'):
+            continue
+        partes = linea.split('\t')
+        if len(partes) >= 7 and 'instagram' in partes[0]:
+            cookies[partes[5]] = partes[6]
+
+    if 'sessionid' not in cookies:
+        print("⚠️ Instagram: IG_COOKIES no contiene 'sessionid'; instaloader seguirá anónimo")
+        return
+
+    try:
+        IL.context._session.cookies.update(cookies)
+        username = IL.test_login()
+        if username:
+            IL.context.username = username
+            print(f"✅ Instagram: sesión de instaloader cargada desde cookies como {username}")
+        else:
+            print("⚠️ Instagram: el sessionid de IG_COOKIES expiró o no es válido para instaloader")
+    except Exception as e:
+        print(f"⚠️ Instagram: no se pudo cargar la sesión desde cookies: {e}")
+
+
+_cargar_sesion_instaloader_desde_cookies()
 
 
 # =============================================

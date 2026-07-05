@@ -5,6 +5,7 @@ envía un link, debe aceptar que el Monkey tiene la razón antes de poder descar
 """
 import os
 import re
+import time
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo
@@ -33,6 +34,16 @@ EMOJI_PLATAFORMA = {
     'youtube': '🎬', 'instagram': '📸', 'tiktok': '🎵',
     'twitter': '🐦', 'facebook': '📘', 'desconocida': '🔗'
 }
+
+# Límite de la Bot API de Telegram para subir archivos
+TELEGRAM_MAX_FILE_MB = 50
+# Peso máximo combinado de un media group; lotes más pesados se parten para
+# que la subida no muera por timeout
+MAX_MB_POR_LOTE = 40
+# Timeout de subida a Telegram (el default de telebot es demasiado corto para
+# videos/carruseles y causa "The write operation timed out")
+UPLOAD_TIMEOUT = 300
+REINTENTOS_ENVIO = 3
 
 
 # =============================================
@@ -235,42 +246,9 @@ def _procesar_descarga(chat_id, texto, user_id):
         f"{emoji} Monkey Descargando de {plataforma.capitalize()} en monkey HD... dame un monkey momento."
     )
 
+    # ---- FASE 1: DESCARGA ----
     try:
         info, archivos_nuevos, dl_error = descargar_media(texto)
-
-        print(f"\n🔍 MONKEY ARCHIVOS DESCARGADOS: {archivos_nuevos}")
-        if dl_error:
-            print(f"📛 MONKEY ERROR DE DESCARGA: {dl_error}")
-
-        if archivos_nuevos:
-            _enviar_archivos(chat_id, archivos_nuevos)
-
-            # Limpiar archivos descargados
-            for arch in archivos_nuevos:
-                try:
-                    os.remove(arch)
-                except:
-                    pass
-
-            # Borrar mensaje de "Descargando..."
-            try:
-                monkey_bot.delete_message(chat_id, msg_espera.message_id)
-            except:
-                pass
-
-        else:
-            # No se descargó nada - mostrar error amigable
-            if dl_error:
-                user_msg = _generar_mensaje_error(dl_error, plataforma)
-                monkey_bot.edit_message_text(
-                    user_msg, chat_id, msg_espera.message_id, parse_mode='Markdown'
-                )
-            else:
-                monkey_bot.edit_message_text(
-                    "❌ No se pudo descargar. El post puede ser privado o la plataforma bloqueó la descarga.",
-                    chat_id, msg_espera.message_id
-                )
-
     except Exception as e:
         error_msg = str(e)[:800]
         try:
@@ -281,53 +259,197 @@ def _procesar_descarga(chat_id, texto, user_id):
             )
         except:
             pass
+        return
+
+    print(f"\n🔍 MONKEY ARCHIVOS DESCARGADOS: {archivos_nuevos}")
+    if dl_error:
+        print(f"📛 MONKEY ERROR DE DESCARGA: {dl_error}")
+
+    if not archivos_nuevos:
+        # No se descargó nada - mostrar error amigable
+        try:
+            if dl_error:
+                user_msg = _generar_mensaje_error(dl_error, plataforma)
+                monkey_bot.edit_message_text(
+                    user_msg, chat_id, msg_espera.message_id, parse_mode='Markdown'
+                )
+            else:
+                monkey_bot.edit_message_text(
+                    "❌ No se pudo descargar. El post puede ser privado o la plataforma bloqueó la descarga.",
+                    chat_id, msg_espera.message_id
+                )
+        except:
+            pass
+        return
+
+    # ---- FASE 2: ENVÍO A TELEGRAM ----
+    # Los timeouts aquí NO son de la descarga: son de la subida de archivos
+    # pesados a Telegram, así que se reportan como error de envío.
+    enviados, intentados = 0, 0
+    error_envio = None
+    try:
+        enviados, intentados = _enviar_archivos(chat_id, archivos_nuevos)
+    except Exception as e:
+        error_envio = e
+        print(f"❌ MONKEY ERROR DE ENVÍO: {e}")
+    finally:
+        # Limpiar archivos descargados pase lo que pase
+        for arch in archivos_nuevos:
+            try:
+                os.remove(arch)
+            except:
+                pass
+
+    if enviados > 0:
+        try:
+            monkey_bot.delete_message(chat_id, msg_espera.message_id)
+        except:
+            pass
+        if enviados < intentados:
+            monkey_bot.send_message(
+                chat_id,
+                f"⚠️ Solo pude enviar {enviados} de {intentados} archivos, "
+                "la conexión falló con el resto. Intenta enviar el link de nuevo."
+            )
+    else:
+        if intentados == 0 and error_envio is None:
+            texto_error = (
+                "❌ El contenido se descargó pero supera el límite de "
+                f"{TELEGRAM_MAX_FILE_MB} MB de Telegram y no se puede enviar."
+            )
+        else:
+            detalle = str(error_envio)[:200] if error_envio else "la conexión con Telegram falló"
+            texto_error = (
+                "❌ El contenido se descargó bien, pero falló la subida a Telegram "
+                f"(conexión lenta o archivos pesados):\n`{detalle}`\n\n"
+                "Intenta enviar el link de nuevo."
+            )
+        try:
+            monkey_bot.edit_message_text(
+                texto_error, chat_id, msg_espera.message_id, parse_mode='Markdown'
+            )
+        except:
+            pass
+
+
+def _es_error_de_conexion(e):
+    """Detecta timeouts y cortes de conexión al subir a Telegram."""
+    s = str(e).lower()
+    return ('timed out' in s or 'timeout' in s or 'connection' in s
+            or 'aborted' in s or 'reset' in s)
+
+
+def _con_reintentos(accion, descripcion):
+    """Ejecuta una acción de envío reintentando si la conexión falla."""
+    for intento in range(REINTENTOS_ENVIO):
+        try:
+            return accion()
+        except Exception as e:
+            if _es_error_de_conexion(e) and intento < REINTENTOS_ENVIO - 1:
+                espera = (intento + 1) * 5
+                print(f"⏳ Envío de {descripcion} falló ({e}), "
+                      f"reintento {intento + 1}/{REINTENTOS_ENVIO - 1} en {espera}s...")
+                time.sleep(espera)
+            else:
+                raise
+
+
+def _enviar_individual(chat_id, archivo):
+    """Envía un solo archivo con timeout largo y reintentos."""
+    def _send():
+        with open(archivo, 'rb') as f:
+            if archivo.lower().endswith('.mp4'):
+                monkey_bot.send_video(chat_id, f, supports_streaming=True,
+                                      timeout=UPLOAD_TIMEOUT)
+            else:
+                monkey_bot.send_photo(chat_id, f, timeout=UPLOAD_TIMEOUT)
+    _con_reintentos(_send, os.path.basename(archivo))
+
+
+def _enviar_media_group(chat_id, lote):
+    """Envía un lote como media group, cerrando siempre los archivos abiertos
+    (si quedan abiertos, en Windows no se pueden borrar después)."""
+    def _send():
+        handles = []
+        try:
+            media_group = []
+            for archivo in lote:
+                f = open(archivo, 'rb')
+                handles.append(f)
+                if archivo.lower().endswith('.mp4'):
+                    media_group.append(InputMediaVideo(f))
+                else:
+                    media_group.append(InputMediaPhoto(f))
+            monkey_bot.send_media_group(chat_id, media_group, timeout=UPLOAD_TIMEOUT)
+        finally:
+            for f in handles:
+                try:
+                    f.close()
+                except:
+                    pass
+    _con_reintentos(_send, f"media group de {len(lote)} archivos")
 
 
 def _enviar_archivos(chat_id, archivos_nuevos):
-    """Envía los archivos descargados al chat."""
-    if len(archivos_nuevos) == 1:
-        # Un solo archivo
-        archivo = archivos_nuevos[0]
-        if archivo.lower().endswith('.mp4'):
-            with open(archivo, 'rb') as f:
-                monkey_bot.send_video(chat_id, f, supports_streaming=True)
-        else:
-            with open(archivo, 'rb') as f:
-                monkey_bot.send_photo(chat_id, f)
-    else:
-        # Múltiples archivos → media group (max 10 por lote)
-        for i in range(0, len(archivos_nuevos), 10):
-            lote = archivos_nuevos[i:i+10]
-            media_group = []
-            for archivo in lote:
-                if archivo.lower().endswith('.mp4'):
-                    media_group.append(InputMediaVideo(open(archivo, 'rb')))
-                else:
-                    media_group.append(InputMediaPhoto(open(archivo, 'rb')))
+    """Envía los archivos descargados al chat.
 
-            if len(media_group) == 1:
-                archivo = lote[0]
-                if archivo.lower().endswith('.mp4'):
-                    with open(archivo, 'rb') as f:
-                        monkey_bot.send_video(chat_id, f, supports_streaming=True)
-                else:
-                    with open(archivo, 'rb') as f:
-                        monkey_bot.send_photo(chat_id, f)
-            else:
+    Retorna (enviados, intentados). Los archivos que superan el límite de
+    Telegram se descartan con aviso y no cuentan como intentados."""
+    enviables = []
+    for archivo in archivos_nuevos:
+        try:
+            size_mb = os.path.getsize(archivo) / (1024 * 1024)
+        except OSError:
+            continue
+        if size_mb > TELEGRAM_MAX_FILE_MB:
+            try:
+                monkey_bot.send_message(
+                    chat_id,
+                    f"⚠️ Un archivo pesa {size_mb:.0f} MB y supera el límite de "
+                    f"{TELEGRAM_MAX_FILE_MB} MB de Telegram, no se puede enviar."
+                )
+            except:
+                pass
+        else:
+            enviables.append((archivo, size_mb))
+
+    # Armar lotes: máx 10 archivos y MAX_MB_POR_LOTE por media group, para que
+    # una sola subida no sea tan pesada que muera por timeout
+    lotes = []
+    lote_actual, peso_actual = [], 0.0
+    for archivo, size_mb in enviables:
+        if lote_actual and (len(lote_actual) >= 10
+                            or peso_actual + size_mb > MAX_MB_POR_LOTE):
+            lotes.append(lote_actual)
+            lote_actual, peso_actual = [], 0.0
+        lote_actual.append(archivo)
+        peso_actual += size_mb
+    if lote_actual:
+        lotes.append(lote_actual)
+
+    enviados = 0
+    for lote in lotes:
+        if len(lote) == 1:
+            try:
+                _enviar_individual(chat_id, lote[0])
+                enviados += 1
+            except Exception as e:
+                print(f"❌ Error enviando {lote[0]}: {e}")
+            continue
+
+        try:
+            _enviar_media_group(chat_id, lote)
+            enviados += len(lote)
+        except Exception as mg_err:
+            print(f"⚠️ Error media_group, enviando uno por uno: {mg_err}")
+            for archivo in lote:
                 try:
-                    monkey_bot.send_media_group(chat_id, media_group)
-                except Exception as mg_err:
-                    print(f"⚠️ Error media_group, enviando uno por uno: {mg_err}")
-                    for archivo in lote:
-                        try:
-                            if archivo.lower().endswith('.mp4'):
-                                with open(archivo, 'rb') as f:
-                                    monkey_bot.send_video(chat_id, f)
-                            else:
-                                with open(archivo, 'rb') as f:
-                                    monkey_bot.send_photo(chat_id, f)
-                        except Exception as ind_err:
-                            print(f"❌ Error enviando {archivo}: {ind_err}")
+                    _enviar_individual(chat_id, archivo)
+                    enviados += 1
+                except Exception as ind_err:
+                    print(f"❌ Error enviando {archivo}: {ind_err}")
+
+    return enviados, len(enviables)
 
 
 def _generar_mensaje_error(dl_error, plataforma):
