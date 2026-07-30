@@ -23,7 +23,9 @@ from config import MONKEY_QUOTLY_TOKEN
 from services import quotly_store as store
 from services import quotly_render as render
 
-bot = telebot.TeleBot(MONKEY_QUOTLY_TOKEN or "QUOTLY_TOKEN_NOT_SET")
+# Placeholder con ':' válido para telebot>=4.36 (valida el token al construir).
+# main.py no arranca el polling si MONKEY_QUOTLY_TOKEN no está configurado.
+bot = telebot.TeleBot(MONKEY_QUOTLY_TOKEN or "0:disabled")
 
 MAX_TEXT = 300
 STEAL_LIMIT = 120

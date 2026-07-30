@@ -23,9 +23,9 @@ from services.telegram_stars_helpers import (
     get_subscription,
 )
 
-# Si el token no está configurado usamos un placeholder para no romper el import;
-# main.py no arranca el polling cuando STARS_TELEGRAM_TOKEN falta.
-stars_bot = telebot.TeleBot(STARS_TELEGRAM_TOKEN or "STARS_TOKEN_NOT_SET")
+# Si el token no está configurado usamos un placeholder con ':' válido (telebot>=4.36
+# valida el token al construir). main.py no arranca el polling si el token falta.
+stars_bot = telebot.TeleBot(STARS_TELEGRAM_TOKEN or "0:disabled")
 
 # Mapa en memoria telegram_user_id -> discord_user_id de la sesión actual.
 # La verdad persistente vive en la tabla telegram_star_subs; esto solo cubre el
