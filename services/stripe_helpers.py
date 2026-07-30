@@ -1,5 +1,9 @@
 """
 stripe_helpers.py - Funciones auxiliares para Stripe (asíncronas).
+
+⚠️ DEPRECADO: estamos migrando el cobro a Telegram Stars
+(ver services/telegram_stars_helpers.py). Este módulo y todas sus llamadas se
+eliminarán una vez validado el nuevo flujo de suscripciones con Stars.
 """
 import asyncio
 import stripe

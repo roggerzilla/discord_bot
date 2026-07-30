@@ -14,6 +14,8 @@ import uvicorn
 from bots.discord_bot import discord_client
 from bots.telegram_access import telegram_bot
 from bots.monkey_descargar import monkey_bot
+from bots.telegram_stars import stars_bot
+from bots.monkey_quotly import bot as quotly_bot
 
 # Importar la app FastAPI
 from api.webhooks import app
@@ -28,6 +30,8 @@ def graceful_shutdown(signum, frame):
     try:
         telegram_bot.stop_polling()
         monkey_bot.stop_polling()
+        stars_bot.stop_polling()
+        quotly_bot.stop_polling()
     except:
         pass
     print("👋 Servicios detenidos. Saliendo...")
@@ -86,6 +90,46 @@ def start_monkey_bot():
                 time.sleep(5)
 
 
+def start_stars_bot():
+    """Hilo para el bot de cobro con Telegram Stars (Bot 3, independiente)."""
+    from config import STARS_TELEGRAM_TOKEN
+    if not STARS_TELEGRAM_TOKEN:
+        print("⚠️ STARS_TELEGRAM_TOKEN no configurado. Bot de Stars deshabilitado.")
+        return
+    while True:
+        try:
+            print("⭐ Telegram Stars Bot iniciado...")
+            stars_bot.infinity_polling(skip_pending=True, timeout=90)
+        except Exception as e:
+            err_msg = str(e)
+            print(f"⚠️ Telegram Stars Bot error: {err_msg}")
+            if "Conflict" in err_msg:
+                print("🚨 Conflicto detectado (409). Esperando 20s para reintentar...")
+                time.sleep(20)
+            else:
+                time.sleep(5)
+
+
+def start_quotly_bot():
+    """Hilo para el bot Quotly/Monkey de stickers (Bot 4)."""
+    from config import MONKEY_QUOTLY_TOKEN
+    if not MONKEY_QUOTLY_TOKEN:
+        print("⚠️ MONKEY_QUOTLY_TOKEN no configurado. Bot Quotly deshabilitado.")
+        return
+    while True:
+        try:
+            print("💬 Quotly/Monkey stickers Bot iniciado...")
+            quotly_bot.infinity_polling(skip_pending=True, timeout=90)
+        except Exception as e:
+            err_msg = str(e)
+            print(f"⚠️ Quotly Bot error: {err_msg}")
+            if "Conflict" in err_msg:
+                print("🚨 Conflicto detectado (409). Esperando 20s para reintentar...")
+                time.sleep(20)
+            else:
+                time.sleep(5)
+
+
 if __name__ == "__main__":
     # Discord en hilo daemon
     threading.Thread(target=start_discord, daemon=True).start()
@@ -95,6 +139,12 @@ if __name__ == "__main__":
 
     # MonkeyDescargar Bot en hilo daemon
     threading.Thread(target=start_monkey_bot, daemon=True).start()
+
+    # Telegram Stars Bot (cobro) en hilo daemon
+    threading.Thread(target=start_stars_bot, daemon=True).start()
+
+    # Quotly/Monkey stickers Bot en hilo daemon
+    threading.Thread(target=start_quotly_bot, daemon=True).start()
 
     print("🚀 Todos los servicios iniciados")
 

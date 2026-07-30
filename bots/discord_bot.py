@@ -10,8 +10,19 @@ from config import (
     ADMIN_LOG_CHANNEL_ID, MANAGED_ROLES, ACTIVE_STATUSES,
     SAFE_MODE_NO_BAN, TABLE_NAME, supabase
 )
+# ⚠️ DEPRECADO: stripe_helpers y stripe se eliminarán al completar la migración a Telegram Stars.
 from services.stripe_helpers import get_customer_subscription_data, calculate_roles_to_assign
 import stripe
+
+# Nuevo sistema de cobro: Telegram Stars.
+from config import STARS_TELEGRAM_BOT_USERNAME
+from services.telegram_stars_helpers import (
+    create_link_code,
+    get_active_star_subs,
+    get_all_linked_discord_ids,
+    roles_for_tier,
+    mark_expired_subs,
+)
 
 intents = discord.Intents.default()
 intents.members = True
@@ -41,6 +52,25 @@ async def on_message(message):
         return
     raw_content = message.content.strip()
 
+    # === Telegram Stars: generar deep link de vinculación ===
+    if isinstance(message.channel, discord.DMChannel) and raw_content.lower().startswith("!telegram"):
+        if not STARS_TELEGRAM_BOT_USERNAME:
+            await message.channel.send("⚠️ El bot de Telegram Stars aún no está configurado.")
+            return
+        try:
+            code = await asyncio.to_thread(create_link_code, str(message.author.id))
+            deep_link = f"https://t.me/{STARS_TELEGRAM_BOT_USERNAME}?start={code}"
+            await message.channel.send(
+                "⭐ **Suscríbete con Telegram Stars**\n\n"
+                f"Abre este enlace en Telegram para vincular tu cuenta y elegir tu plan:\n{deep_link}\n\n"
+                "_El enlace expira en 15 minutos._"
+            )
+        except Exception as e:
+            print(f"Telegram link Err: {e}")
+            await message.channel.send("❌ Error generando el enlace.")
+        return
+
+    # ⚠️ DEPRECADO: vinculación con Stripe. Se eliminará al completar la migración a Telegram Stars.
     if isinstance(message.channel, discord.DMChannel) and raw_content.lower().startswith("!link"):
         try:
             email = raw_content[5:].strip() if not raw_content.lower().startswith("!link ") else raw_content[6:].strip()
@@ -106,8 +136,10 @@ async def check_subscriptions():
     if not guild:
         return
     try:
+        # --- Fuente 1: Stripe (⚠️ DEPRECADO, se eliminará) ---
         response = supabase.table(TABLE_NAME).select("*").neq("discord_user_id", "None").execute()
-        user_active_map = {}
+        # discord_user_id -> roles que Stripe le da (set)
+        stripe_roles_map = {}
         for row in response.data:
             c_id = row.get("stripe_customer_id")
             d_id = row.get("discord_user_id")
@@ -120,42 +152,56 @@ async def check_subscriptions():
                     "subscription_status": real_status,
                     "updated_at": discord.utils.utcnow().isoformat()
                 }).eq("stripe_customer_id", c_id).execute()
-            if d_id not in user_active_map:
-                user_active_map[d_id] = False
             if real_status in ACTIVE_STATUSES:
-                user_active_map[d_id] = True
+                stripe_roles_map.setdefault(d_id, set()).update(calculate_roles_to_assign(prod_obj))
             await asyncio.sleep(0.5)
 
-        processed_users = set()
-        for row in response.data:
-            d_id = row.get("discord_user_id")
-            if d_id in processed_users:
+        # --- Fuente 2: Telegram Stars (nuevo sistema) ---
+        await asyncio.to_thread(mark_expired_subs)
+        star_active = await asyncio.to_thread(get_active_star_subs)
+        star_all_ids = await asyncio.to_thread(get_all_linked_discord_ids)
+        # discord_user_id -> roles que las Stars le dan (set)
+        stars_roles_map = {}
+        for sub in star_active:
+            d_id = str(sub.get("discord_user_id"))
+            stars_roles_map.setdefault(d_id, set()).update(roles_for_tier(sub.get("tier")))
+
+        # --- Unificar: todo Discord ID visto en cualquiera de las dos fuentes ---
+        all_ids = set(stripe_roles_map.keys()) | set(stars_roles_map.keys()) | star_all_ids
+        all_ids |= {row.get("discord_user_id") for row in response.data if row.get("discord_user_id")}
+
+        for d_id in all_ids:
+            if not d_id:
                 continue
-            processed_users.add(d_id)
-            member = guild.get_member(int(d_id))
+            try:
+                member = guild.get_member(int(d_id))
+            except (TypeError, ValueError):
+                continue
             if not member:
                 continue
-            is_user_safe = user_active_map.get(d_id, False)
-            if is_user_safe:
-                active_row = next((r for r in response.data if r["discord_user_id"] == d_id and r["subscription_status"] in ACTIVE_STATUSES), None)
-                if active_row:
-                    _, prod_obj = await get_customer_subscription_data(active_row["stripe_customer_id"])
-                    roles_to_add = calculate_roles_to_assign(prod_obj)
-                    for rid in roles_to_add:
-                        r = guild.get_role(rid)
-                        if r and r not in member.roles:
-                            await member.add_roles(r, reason="Sub Activa")
-                            print(f"➕ Rol {r.name} a {member.display_name}")
-            else:
-                if not SAFE_MODE_NO_BAN:
-                    roles_removed = []
-                    for rid in MANAGED_ROLES:
-                        r = guild.get_role(rid)
-                        if r and r in member.roles:
-                            await member.remove_roles(r, reason="Baja")
-                            roles_removed.append(r.name)
-                    if roles_removed and admin_log_channel:
-                        await admin_log_channel.send(f"🔴 **Baja:** {member.mention} perdió roles.")
+
+            # Roles a los que el usuario TIENE derecho (unión de ambas fuentes).
+            entitled = set(stripe_roles_map.get(d_id, set())) | set(stars_roles_map.get(d_id, set()))
+
+            # Otorgar los que le falten.
+            for rid in entitled:
+                r = guild.get_role(rid)
+                if r and r not in member.roles:
+                    await member.add_roles(r, reason="Suscripción activa")
+                    print(f"➕ Rol {r.name} a {member.display_name}")
+
+            # Quitar roles gestionados a los que YA NO tiene derecho (baja o downgrade).
+            if not SAFE_MODE_NO_BAN:
+                roles_removed = []
+                for rid in MANAGED_ROLES:
+                    if rid in entitled:
+                        continue
+                    r = guild.get_role(rid)
+                    if r and r in member.roles:
+                        await member.remove_roles(r, reason="Baja / sin suscripción")
+                        roles_removed.append(r.name)
+                if roles_removed and admin_log_channel and not entitled:
+                    await admin_log_channel.send(f"🔴 **Baja:** {member.mention} perdió roles.")
             await asyncio.sleep(0.1)
     except Exception as e:
         print(f"Error Loop: {e}")

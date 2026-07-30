@@ -15,6 +15,8 @@ async def home():
     return {"status": "Bot Active - All Services Running"}
 
 
+# ⚠️ DEPRECADO: webhook de Stripe. Se eliminará al completar la migración a Telegram Stars.
+# El cobro con Stars no usa este webhook (Telegram entrega los pagos por polling al bot de Stars).
 @app.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
     payload = await request.body()

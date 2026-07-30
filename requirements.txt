@@ -4,7 +4,10 @@ uvicorn[standard]
 supabase
 stripe
 python-dotenv
-pyTelegramBotAPI
+pyTelegramBotAPI>=4.26
 yt-dlp
 instaloader
 requests
+Pillow>=10
+pilmoji>=2.0
+imageio-ffmpeg>=0.5
