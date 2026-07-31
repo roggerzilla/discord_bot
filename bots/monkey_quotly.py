@@ -739,10 +739,22 @@ def _steal_title(n):
     return "monkey_steal" if n <= 1 else f"monkey_steal {n}"
 
 
-def _series_name(user_id, fmt, n, botuser):
+def _unified_name(user_id, n, botuser):
+    """Pack único del usuario: mezcla imágenes, videos y animados."""
+    suffix = "" if n <= 1 else f"_{n}"
+    return f"ms_{user_id}{suffix}_by_{botuser}"
+
+
+def _legacy_name(user_id, fmt, n, botuser):
+    """Serie vieja separada por formato (se sigue reusando para no dejarla huérfana)."""
     f = fmt[0]  # s / v / a
     suffix = "" if n <= 1 else f"_{n}"
     return f"ms_{user_id}_{f}{suffix}_by_{botuser}"
+
+
+def _is_format_error(msg=""):
+    m = (msg or "").upper()
+    return "FORMAT" in m or "MISMATCH" in m
 
 
 def _steal_source(message_sticker, fmt):
@@ -751,22 +763,51 @@ def _steal_source(message_sticker, fmt):
     return _download(message_sticker.file_id)
 
 
-def _resolve_steal_pack(user_id, fmt, botuser):
-    for p in store.get_packs(user_id, fmt):
-        if not p.get("steal"):
+def _resolve_steal_pack(user_id, botuser, fmt=None):
+    """Dónde guardar el sticker robado.
+
+    fmt=None  → pack unificado (todo junto). Reusa primero cualquier pack de robo
+                que ya exista con lugar, para no crear packs de más.
+    fmt=...   → serie separada por formato (fallback si Telegram no deja mezclar).
+    """
+    candidates = []
+    if fmt is None:
+        for p in store.get_packs(user_id):
+            if p.get("steal"):
+                candidates.append((p["name"], p.get("title") or _steal_title(1)))
+        candidates.append((_unified_name(user_id, 1, botuser), _steal_title(1)))
+        # packs de la serie vieja por formato: los reusamos antes de crear uno nuevo
+        for f in ("static", "video", "animated"):
+            candidates.append((_legacy_name(user_id, f, 1, botuser), _steal_title(1)))
+    else:
+        candidates.append((_legacy_name(user_id, fmt, 1, botuser), _steal_title(1)))
+
+    seen = set()
+    for name, title in candidates:
+        if name in seen:
             continue
-        size = _set_size(p["name"])
+        seen.add(name)
+        size = _set_size(name)
         if size is not None and size < STEAL_LIMIT:
-            return {"name": p["name"], "title": p["title"], "exists": True}
+            return {"name": name, "title": title, "exists": True}
+
+    # Nada con lugar → seguimos la serie correspondiente (monkey_steal 2, 3, ...)
     n = 1
     while True:
-        name = _series_name(user_id, fmt, n, botuser)
+        name = _unified_name(user_id, n, botuser) if fmt is None else _legacy_name(user_id, fmt, n, botuser)
         size = _set_size(name)
         if size is None:
             return {"name": name, "title": _steal_title(n), "exists": False}
         if size < STEAL_LIMIT:
             return {"name": name, "title": _steal_title(n), "exists": True}
         n += 1
+
+
+def _save_sticker_into(user_id, target, value, emoji, fmt):
+    if target["exists"]:
+        _add_to_set(user_id, target["name"], value, emoji, fmt)
+    else:
+        _create_set(user_id, target["name"], target["title"], value, emoji, fmt)
 
 
 @bot.message_handler(commands=["monkey_steal"])
@@ -788,13 +829,10 @@ def handle_monkey_steal(message):
         return bot.reply_to(message, f"❌ No pude leer el sticker: {e}")
 
     username = _bot_username()
-    target = _resolve_steal_pack(user_id, fmt, username)
+    target = _resolve_steal_pack(user_id, username)
 
     try:
-        if target["exists"]:
-            _add_to_set(user_id, target["name"], value, emoji, fmt)
-        else:
-            _create_set(user_id, target["name"], target["title"], value, emoji, fmt)
+        _save_sticker_into(user_id, target, value, emoji, fmt)
     except Exception as e:
         if _is_peer_error(str(e)):
             return bot.reply_to(
@@ -802,7 +840,14 @@ def handle_monkey_steal(message):
                 f"✋ Para guardarte stickers necesito que primero me escribas por privado.\n\n"
                 f"👉 https://t.me/{username}\n\nTocá \"Iniciar\" y volvé a intentar el /monkey_steal.",
                 disable_web_page_preview=True)
-        return bot.reply_to(message, f"❌ No pude guardar el sticker: {e}")
+        if not _is_format_error(str(e)):
+            return bot.reply_to(message, f"❌ No pude guardar el sticker: {e}")
+        # Telegram no aceptó mezclar formatos en ese pack → usamos la serie por formato.
+        target = _resolve_steal_pack(user_id, username, fmt=fmt)
+        try:
+            _save_sticker_into(user_id, target, value, emoji, fmt)
+        except Exception as e2:
+            return bot.reply_to(message, f"❌ No pude guardar el sticker: {e2}")
 
     store.add_pack(user_id, target["name"], target["title"], fmt, steal=True)
     bot.reply_to(message, f'✅ Guardado en "{target["title"]}"\nhttps://t.me/addstickers/{target["name"]}',
