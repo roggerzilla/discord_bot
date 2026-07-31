@@ -56,6 +56,7 @@ def _tiers_menu() -> InlineKeyboardMarkup:
 @stars_bot.message_handler(commands=['start'])
 def handle_start(message):
     """/start <code>: resuelve el código de vinculación y muestra los tiers."""
+    print(f"⭐ /start recibido de tg={message.from_user.id} chat={message.chat.id}")
     parts = message.text.split(maxsplit=1)
     code = parts[1].strip() if len(parts) > 1 else None
 
@@ -169,3 +170,16 @@ def handle_cancel(message):
         )
     else:
         stars_bot.reply_to(message, "No encontré una suscripción activa para cancelar.")
+
+
+# Catch-all: debe quedar SIEMPRE al final (telebot evalúa los handlers en orden de
+# registro). Solo captura lo que ningún handler anterior atendió; sirve para ver en
+# los logs si Telegram está entregando updates cuando el bot parece "mudo".
+@stars_bot.message_handler(func=lambda m: True)
+def handle_unknown(message):
+    print(f"⭐ Mensaje sin handler de tg={message.from_user.id}: {message.text!r}")
+    stars_bot.reply_to(
+        message,
+        "No reconozco ese comando. Usa /planes para ver las suscripciones "
+        "o /cancelar para apagar la renovación.",
+    )

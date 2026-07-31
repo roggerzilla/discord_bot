@@ -99,7 +99,9 @@ def start_stars_bot():
     while True:
         try:
             print("⭐ Telegram Stars Bot iniciado...")
-            stars_bot.infinity_polling(skip_pending=True, timeout=90)
+            # Sin skip_pending: este bot cobra suscripciones y un /start con código de
+            # vinculación perdido durante un redeploy deja al usuario sin poder pagar.
+            stars_bot.infinity_polling(timeout=90)
         except Exception as e:
             err_msg = str(e)
             print(f"⚠️ Telegram Stars Bot error: {err_msg}")
