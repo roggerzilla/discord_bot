@@ -87,7 +87,9 @@ def _create_set(user_id, name, title, value, emoji, fmt):
 
 
 def _add_to_set(user_id, name, value, emoji, fmt):
-    bot.add_sticker_to_set(user_id, name, sticker=_input_sticker(value, emoji, fmt))
+    # telebot 4.36 exige `emojis` posicional aunque uses `sticker=InputSticker`
+    # (lo ignora cuando `sticker` está presente, pero es obligatorio en la firma).
+    bot.add_sticker_to_set(user_id, name, emoji, sticker=_input_sticker(value, emoji, fmt))
 
 
 def _set_size(name):
