@@ -32,22 +32,51 @@ TIER_3_ROLE_ID = TIER_MAPPING[TIER_3_PRODUCT_ID]
 # Cada tier: precio en Stars (XTR) + roles de Discord que otorga.
 # Reutiliza los role IDs de TIER_MAPPING. AJUSTA los precios (stars) a tu gusto.
 # ===============================
+# Precios en Stars calculados sobre un payout aproximado de $0.013 USD por Star
+# (tasa de retiro vía Fragment). Redondeados hacia arriba para absorber la comisión.
+# ⚠️ La tasa la fija Telegram y cambia: verifícala antes de tocar estos números.
 STAR_TIER_MAPPING = {
     "tier1": {
         "label": "Tier 1",
-        "stars": 100,  # ⚠️ AJUSTAR precio real en Stars
+        "emoji": "🥉",
+        "stars": 400,      # ~$5 USD netos
+        "usd": 5,
         "roles": [1459004030381592606],
+        # ⚠️ PLACEHOLDER: reemplaza estos beneficios por los reales.
+        "perks": [
+            "Access to the members-only channel",
+            "Exclusive weekly drops",
+            "Tier 1 role on Discord",
+        ],
     },
     "tier2": {
         "label": "Tier 2",
-        "stars": 250,  # ⚠️ AJUSTAR
+        "emoji": "🥈",
+        "stars": 800,      # ~$10 USD netos
+        "usd": 10,
         "roles": [1459004119711879372],
+        # ⚠️ PLACEHOLDER: reemplaza estos beneficios por los reales.
+        "perks": [
+            "Everything in Tier 1",
+            "Full back catalog, no limits",
+            "Priority requests",
+            "Tier 2 role on Discord",
+        ],
     },
     "tier3": {
         "label": "Tier 3",
-        "stars": 500,  # ⚠️ AJUSTAR
+        "emoji": "👑",
+        "stars": 1200,     # ~$15 USD netos
+        "usd": 15,
         # Tier 3 incluye también el rol por defecto (paridad con la lógica de Stripe)
         "roles": [1459004146970787861],
+        # ⚠️ PLACEHOLDER: reemplaza estos beneficios por los reales.
+        "perks": [
+            "Everything in Tier 2",
+            "Early access before anyone else",
+            "Direct line to me",
+            "Tier 3 role on Discord",
+        ],
     },
 }
 # Periodo de suscripción de Telegram Stars: el ÚNICO valor permitido es 30 días.

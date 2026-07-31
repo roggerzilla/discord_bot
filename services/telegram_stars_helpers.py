@@ -82,6 +82,28 @@ def consume_link_code(code: str) -> None:
         print(f"⚠️ Error consumiendo link code: {e}")
 
 
+def attach_discord_to_subscription(telegram_user_id: int, discord_user_id) -> bool:
+    """Escribe el discord_user_id sobre una suscripción YA PAGADA.
+
+    El flujo es pago-primero: se cobra sin conocer la cuenta de Discord y la fila queda
+    con discord_user_id en null (invisible para get_active_star_subs, o sea sin roles).
+    Cuando el usuario canjea su código, esto completa la fila y el loop de Discord le
+    entrega los roles en la siguiente pasada.
+    Devuelve True si existía una suscripción que completar."""
+    if not get_subscription(telegram_user_id):
+        return False
+    try:
+        supabase.table(TELEGRAM_SUBS_TABLE).update({
+            "discord_user_id": str(discord_user_id),
+            "updated_at": _now_iso(),
+        }).eq("telegram_user_id", int(telegram_user_id)).execute()
+        print(f"🔗 Suscripción vinculada: tg={telegram_user_id} → discord={discord_user_id}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Error vinculando suscripción a Discord: {e}")
+        return False
+
+
 # ===============================
 # TIERS / ROLES
 # ===============================
@@ -105,9 +127,17 @@ def create_subscription_invoice_link(bot, tier: str) -> str:
     Devuelve la URL del invoice (createInvoiceLink)."""
     conf = STAR_TIER_MAPPING[tier]
     prices = [LabeledPrice(label=conf["label"], amount=conf["stars"])]
+
+    # Telegram corta la descripción en 255 caracteres: metemos los perks y recortamos.
+    perks = " • ".join(conf.get("perks", []))
+    description = f"{perks} • Renews every 30 days, cancel anytime." if perks else \
+        "Monthly subscription, renews every 30 days. Cancel anytime."
+    if len(description) > 255:
+        description = description[:252] + "..."
+
     return bot.create_invoice_link(
-        title=f"Suscripción {conf['label']}",
-        description=f"Acceso {conf['label']} (renovación mensual con Telegram Stars).",
+        title=f"{conf['label']} — monthly",
+        description=description,
         payload=tier,               # se recupera en successful_payment.invoice_payload
         provider_token="",          # Stars no usa provider token
         currency="XTR",

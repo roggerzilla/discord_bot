@@ -1,15 +1,18 @@
 """
 telegram_stars.py - Telegram Bot 3: Cobro de suscripciones con Telegram Stars.
 
-Bot INDEPENDIENTE (token propio) que:
-  1. Vincula al usuario de Telegram con su cuenta de Discord vía un deep link
-     generado desde el bot de Discord (/start <code>).
-  2. Ofrece varios tiers y cobra una suscripción recurrente en Stars (XTR, 30 días).
-  3. Registra los pagos en Supabase. El otorgamiento/quita de ROLES de Discord lo
-     hace el loop del bot de Discord (una sola fuente de verdad).
+Bot INDEPENDIENTE (token propio) con flujo PAGO-PRIMERO:
+  1. El usuario abre el bot y ve el catálogo de tiers al instante (cero fricción).
+  2. Paga en Stars (XTR, suscripción recurrente de 30 días) sin necesidad de haber
+     vinculado nada todavía. La fila en Supabase queda con discord_user_id en null.
+  3. Recién DESPUÉS del pago se le pide vincular su Discord con /link. Al canjear el
+     código se completa la fila y el loop del bot de Discord le entrega los roles.
 
-Este sistema reemplazará a Stripe.
+El otorgamiento/quita de ROLES lo hace siempre el loop del bot de Discord
+(una sola fuente de verdad). Este sistema reemplaza a Stripe.
 """
+import html
+
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -17,6 +20,7 @@ from config import STARS_TELEGRAM_TOKEN, STAR_TIER_MAPPING
 from services.telegram_stars_helpers import (
     resolve_link_code,
     consume_link_code,
+    attach_discord_to_subscription,
     create_subscription_invoice_link,
     record_payment,
     cancel_subscription,
@@ -32,6 +36,15 @@ stars_bot = telebot.TeleBot(STARS_TELEGRAM_TOKEN or "0:disabled")
 # hueco entre "vinculó" y "pagó" (antes de que exista fila de suscripción).
 _pending_links: dict = {}
 
+# Comprar Stars dentro de las apps de iOS/Android carga la comisión de tienda (~30%).
+# En Telegram Desktop / Web el mismo paquete de Stars sale más barato para el usuario.
+APPLE_WARNING = (
+    "⚠️ <b>Read this before you pay</b>\n"
+    "Buying Stars inside the iPhone/iPad app costs about <b>30% more</b> — that's "
+    "Apple's cut, not mine. Top up your Stars on <b>Telegram Desktop or Telegram Web</b> "
+    "and the exact same plan gets noticeably cheaper."
+)
+
 
 def _get_discord_id(telegram_user_id: int):
     """Obtiene el discord_user_id de un usuario: primero de la sesión, luego de la BD."""
@@ -44,95 +57,213 @@ def _get_discord_id(telegram_user_id: int):
 
 
 def _tiers_menu() -> InlineKeyboardMarkup:
+    """Botones de compra, uno por tier."""
     markup = InlineKeyboardMarkup(row_width=1)
     for tier_key, conf in STAR_TIER_MAPPING.items():
         markup.add(InlineKeyboardButton(
-            f"⭐ {conf['label']} — {conf['stars']} Stars/mes",
+            f"{conf.get('emoji', '⭐')} {conf['label']} — {conf['stars']} ⭐ /month",
             callback_data=f"buy:{tier_key}",
         ))
     return markup
 
 
+def _catalog_text(header: str) -> str:
+    """Arma el catálogo con los beneficios de cada tier.
+    Usa HTML porque los perks los edita el dueño del bot a mano y un '_' o un '*'
+    suelto rompería el parseo con Markdown."""
+    blocks = [header, ""]
+    for conf in STAR_TIER_MAPPING.values():
+        blocks.append(
+            f"{conf.get('emoji', '⭐')} <b>{html.escape(conf['label'])}</b> — "
+            f"<b>{conf['stars']} ⭐</b> /month"
+        )
+        for perk in conf.get("perks", []):
+            blocks.append(f"   ✓ {html.escape(perk)}")
+        blocks.append("")
+    blocks.append(APPLE_WARNING)
+    blocks.append("")
+    blocks.append("<i>Auto-renews every 30 days. Cancel anytime with /cancel.</i>")
+    return "\n".join(blocks)
+
+
+# Instrucciones de vinculación: se reutilizan tras el pago y desde /link.
+LINK_INSTRUCTIONS = (
+    "🔗 <b>Link your Discord account</b>\n\n"
+    "This is how your roles get assigned:\n\n"
+    "1️⃣ Open Discord and send <code>!telegram</code> as a direct message to the bot.\n"
+    "2️⃣ It replies with a link — tap it and it brings you back here, already linked.\n\n"
+    "That's it. Your roles show up within a few minutes.\n\n"
+    "<i>The link expires after 15 minutes — just send !telegram again if it does.</i>"
+)
+
+
+def _link_button() -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("🔗 How do I link my Discord?", callback_data="howtolink"))
+    return markup
+
+
 @stars_bot.message_handler(commands=['start'])
 def handle_start(message):
-    """/start <code>: resuelve el código de vinculación y muestra los tiers."""
+    """/start [code]: muestra el catálogo. Con código, además vincula la cuenta."""
     print(f"⭐ /start recibido de tg={message.from_user.id} chat={message.chat.id}")
     parts = message.text.split(maxsplit=1)
     code = parts[1].strip() if len(parts) > 1 else None
 
-    # El catálogo se muestra SIEMPRE: quien llega en frío debe ver qué puede comprar.
-    # La vinculación con Discord se exige recién al momento de pagar (handle_buy).
     if code:
-        discord_id = resolve_link_code(code)
-        if discord_id:
-            _pending_links[message.from_user.id] = str(discord_id)
-            consume_link_code(code)
-            stars_bot.reply_to(
-                message,
-                "✅ Cuenta de Discord vinculada.\n\nElige tu plan de suscripción:",
-                reply_markup=_tiers_menu(),
-            )
-            return
-        header = "⛔ Ese enlace es inválido o ya expiró, pero estos son los planes:"
-    elif _get_discord_id(message.from_user.id):
-        header = "👋 ¡Hola de nuevo! Elige tu plan de suscripción:"
-    else:
-        header = (
-            "👋 Estos son los planes disponibles, se pagan con Telegram Stars ⭐ "
-            "y se renuevan cada 30 días:"
+        _redeem_code(message, code)
+        return
+
+    stars_bot.reply_to(
+        message,
+        _catalog_text("⭐ <b>Choose your plan</b>"),
+        reply_markup=_tiers_menu(),
+        parse_mode="HTML",
+    )
+
+
+def _redeem_code(message, code: str) -> None:
+    """Canjea un código de vinculación. Si ya hay una suscripción pagada, la completa."""
+    discord_id = resolve_link_code(code)
+    if not discord_id:
+        stars_bot.reply_to(
+            message,
+            _catalog_text("⛔ <b>That link is invalid or expired.</b>\nHere are the plans anyway:"),
+            reply_markup=_tiers_menu(),
+            parse_mode="HTML",
         )
+        return
 
-    stars_bot.reply_to(message, header, reply_markup=_tiers_menu())
+    _pending_links[message.from_user.id] = str(discord_id)
+    consume_link_code(code)
+
+    # Si ya pagó (flujo pago-primero), completamos la fila y los roles salen solos.
+    if attach_discord_to_subscription(message.from_user.id, discord_id):
+        stars_bot.reply_to(
+            message,
+            "✅ <b>You're all set!</b>\n\nYour Discord account is linked to your active "
+            "subscription. Your roles will be assigned within a few minutes.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Vinculó antes de pagar: al catálogo, y el pago ya sale vinculado.
+    stars_bot.reply_to(
+        message,
+        _catalog_text("✅ <b>Discord account linked.</b>\nNow pick your plan:"),
+        reply_markup=_tiers_menu(),
+        parse_mode="HTML",
+    )
 
 
-@stars_bot.message_handler(commands=['planes'])
+@stars_bot.message_handler(commands=['plans'])
 def handle_plans(message):
-    """Muestra los tiers disponibles. El catálogo es público; vincular se pide al pagar."""
-    stars_bot.reply_to(message, "Elige tu plan:", reply_markup=_tiers_menu())
+    """Catálogo público: no exige vinculación, solo muestra qué se puede comprar."""
+    stars_bot.reply_to(
+        message,
+        _catalog_text("⭐ <b>Available plans</b>"),
+        reply_markup=_tiers_menu(),
+        parse_mode="HTML",
+    )
+
+
+@stars_bot.message_handler(commands=['link'])
+def handle_link(message):
+    """/link [code]: canjea un código, o explica cómo obtenerlo."""
+    parts = message.text.split(maxsplit=1)
+    code = parts[1].strip() if len(parts) > 1 else None
+
+    if code:
+        _redeem_code(message, code)
+        return
+
+    if _get_discord_id(message.from_user.id):
+        stars_bot.reply_to(
+            message,
+            "✅ Your Discord account is already linked. Nothing else to do.",
+            parse_mode="HTML",
+        )
+        return
+
+    stars_bot.reply_to(message, LINK_INSTRUCTIONS, parse_mode="HTML")
+
+
+@stars_bot.message_handler(commands=['status'])
+def handle_status(message):
+    """Estado de la suscripción del usuario."""
+    sub = get_subscription(message.from_user.id)
+    if not sub:
+        stars_bot.reply_to(
+            message,
+            _catalog_text("You don't have an active subscription yet.\nHere's what's available:"),
+            reply_markup=_tiers_menu(),
+            parse_mode="HTML",
+        )
+        return
+
+    conf = STAR_TIER_MAPPING.get(sub.get("tier"), {})
+    lines = [
+        f"📋 <b>Your subscription</b>\n",
+        f"Plan: <b>{html.escape(conf.get('label', sub.get('tier') or 'unknown'))}</b>",
+        f"Status: <b>{html.escape(str(sub.get('status', 'unknown')))}</b>",
+        f"Auto-renew: <b>{'on' if sub.get('is_recurring') else 'off'}</b>",
+    ]
+    if sub.get("subscription_expiration_date"):
+        lines.append(f"Renews/expires: <b>{html.escape(str(sub['subscription_expiration_date'])[:10])}</b>")
+
+    if not sub.get("discord_user_id"):
+        lines.append(
+            "\n⚠️ <b>Your Discord isn't linked yet</b> — that's why you don't have your "
+            "roles. Send /link to fix it in under a minute."
+        )
+        stars_bot.reply_to(message, "\n".join(lines), reply_markup=_link_button(), parse_mode="HTML")
+        return
+
+    lines.append("\n🔗 Discord: <b>linked</b>")
+    stars_bot.reply_to(message, "\n".join(lines), parse_mode="HTML")
+
+
+@stars_bot.callback_query_handler(func=lambda c: c.data == "howtolink")
+def handle_howtolink(call):
+    stars_bot.answer_callback_query(call.id)
+    stars_bot.send_message(call.message.chat.id, LINK_INSTRUCTIONS, parse_mode="HTML")
 
 
 @stars_bot.callback_query_handler(func=lambda c: c.data.startswith("buy:"))
 def handle_buy(call):
-    """Genera y envía el invoice de suscripción del tier elegido."""
+    """Genera y envía el invoice del tier elegido.
+
+    NO exige vinculación con Discord: el objetivo es que el pago sea inmediato.
+    La cuenta se vincula después, en handle_successful_payment."""
     tier = call.data.split(":", 1)[1]
     if tier not in STAR_TIER_MAPPING:
-        stars_bot.answer_callback_query(call.id, "Tier inválido.")
-        return
-
-    # Sin discord_user_id no hay a quién otorgarle los roles: se exige vincular ANTES
-    # de cobrar, para no dejar a nadie pagado y sin acceso.
-    discord_id = _get_discord_id(call.from_user.id)
-    if not discord_id:
-        stars_bot.answer_callback_query(call.id)
-        stars_bot.send_message(
-            call.message.chat.id,
-            f"🔗 Antes de cobrarte necesito saber a qué cuenta de Discord darle el rol de "
-            f"*{STAR_TIER_MAPPING[tier]['label']}*.\n\n"
-            "1️⃣ Entra a Discord y mándale `!telegram` por mensaje directo al bot.\n"
-            "2️⃣ Abre el enlace que te devuelve: te trae aquí ya vinculado.\n"
-            "3️⃣ Elige tu plan y paga.\n\n"
-            "Toma menos de un minuto y solo se hace una vez.",
-            parse_mode="Markdown",
-        )
+        stars_bot.answer_callback_query(call.id, "Unknown plan.")
         return
 
     try:
         invoice_url = create_subscription_invoice_link(stars_bot, tier)
     except Exception as e:
         print(f"⚠️ Error creando invoice link: {e}")
-        stars_bot.answer_callback_query(call.id, "No se pudo crear el pago. Intenta de nuevo.", show_alert=True)
+        stars_bot.answer_callback_query(
+            call.id, "Couldn't create the payment. Please try again.", show_alert=True
+        )
         return
 
     conf = STAR_TIER_MAPPING[tier]
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton(f"💳 Pagar {conf['stars']} Stars/mes", url=invoice_url))
+    markup.add(InlineKeyboardButton(f"💳 Pay {conf['stars']} ⭐ /month", url=invoice_url))
+
+    perks = "\n".join(f"   ✓ {html.escape(p)}" for p in conf.get("perks", []))
     stars_bot.answer_callback_query(call.id)
     stars_bot.send_message(
         call.message.chat.id,
-        f"Estás por suscribirte a **{conf['label']}** ({conf['stars']} Stars al mes, "
-        f"renovación automática).\n\nToca el botón para pagar:",
+        f"{conf.get('emoji', '⭐')} <b>{html.escape(conf['label'])}</b> — "
+        f"<b>{conf['stars']} ⭐</b> /month\n\n"
+        f"{perks}\n\n"
+        f"{APPLE_WARNING}\n\n"
+        "Tap below to pay. Renews automatically every 30 days, cancel anytime.",
         reply_markup=markup,
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
 
@@ -144,7 +275,7 @@ def handle_pre_checkout(pre_checkout_query):
 
 @stars_bot.message_handler(content_types=['successful_payment'])
 def handle_successful_payment(message):
-    """Registra el pago (inicial o recurrente). El otorgamiento de roles lo hace el loop de Discord."""
+    """Registra el pago y, si aún no hay Discord vinculado, lo pide AHORA."""
     sp = message.successful_payment
     tier = sp.invoice_payload  # el tier lo pusimos como payload
     telegram_user_id = message.from_user.id
@@ -159,23 +290,40 @@ def handle_successful_payment(message):
         is_recurring=getattr(sp, "is_recurring", False),
     )
 
-    if getattr(sp, "is_first_recurring", False) or getattr(sp, "is_recurring", False):
-        msg = "✅ ¡Suscripción activa! Tus roles de Discord se asignarán en unos minutos."
-    else:
-        msg = "✅ ¡Pago recibido! Tus roles de Discord se asignarán en unos minutos."
-    stars_bot.reply_to(message, msg)
+    if discord_id:
+        stars_bot.reply_to(
+            message,
+            "✅ <b>Payment received — you're subscribed!</b>\n\n"
+            "Your Discord roles will be assigned within a few minutes.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Pago-primero: cobrado pero sin destino para los roles. Este es el único paso
+    # que le queda al usuario, así que se pide de forma directa y sin rodeos.
+    print(f"⭐ Pago sin Discord vinculado: tg={telegram_user_id} tier={tier}")
+    stars_bot.reply_to(
+        message,
+        "✅ <b>Payment received — you're subscribed!</b>\n\n"
+        "One last step: I still don't know which Discord account to give the roles to.\n\n"
+        + LINK_INSTRUCTIONS,
+        reply_markup=_link_button(),
+        parse_mode="HTML",
+    )
 
 
-@stars_bot.message_handler(commands=['cancelar'])
+@stars_bot.message_handler(commands=['cancel'])
 def handle_cancel(message):
     """Cancela la auto-renovación. El acceso se conserva hasta la fecha de expiración."""
     if cancel_subscription(stars_bot, message.from_user.id):
         stars_bot.reply_to(
             message,
-            "🚫 Auto-renovación cancelada. Conservas el acceso hasta el fin del periodo ya pagado.",
+            "🚫 <b>Auto-renew is off.</b>\n\nYou keep your access until the end of the "
+            "period you already paid for.",
+            parse_mode="HTML",
         )
     else:
-        stars_bot.reply_to(message, "No encontré una suscripción activa para cancelar.")
+        stars_bot.reply_to(message, "I couldn't find an active subscription to cancel.")
 
 
 # Catch-all: debe quedar SIEMPRE al final (telebot evalúa los handlers en orden de
@@ -186,6 +334,7 @@ def handle_unknown(message):
     print(f"⭐ Mensaje sin handler de tg={message.from_user.id}: {message.text!r}")
     stars_bot.reply_to(
         message,
-        "No reconozco ese comando. Usa /planes para ver las suscripciones "
-        "o /cancelar para apagar la renovación.",
+        "I didn't catch that. Use /plans to see the subscriptions, /link to connect "
+        "your Discord, /status to check your subscription, or /cancel to stop renewals.",
+        reply_markup=_tiers_menu(),
     )
