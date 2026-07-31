@@ -60,40 +60,34 @@ def handle_start(message):
     parts = message.text.split(maxsplit=1)
     code = parts[1].strip() if len(parts) > 1 else None
 
-    if not code:
-        stars_bot.reply_to(
-            message,
-            "👋 Para suscribirte, primero genera tu enlace desde el bot de Discord "
-            "(mándale `!telegram` por mensaje directo) y ábrelo aquí.",
+    # El catálogo se muestra SIEMPRE: quien llega en frío debe ver qué puede comprar.
+    # La vinculación con Discord se exige recién al momento de pagar (handle_buy).
+    if code:
+        discord_id = resolve_link_code(code)
+        if discord_id:
+            _pending_links[message.from_user.id] = str(discord_id)
+            consume_link_code(code)
+            stars_bot.reply_to(
+                message,
+                "✅ Cuenta de Discord vinculada.\n\nElige tu plan de suscripción:",
+                reply_markup=_tiers_menu(),
+            )
+            return
+        header = "⛔ Ese enlace es inválido o ya expiró, pero estos son los planes:"
+    elif _get_discord_id(message.from_user.id):
+        header = "👋 ¡Hola de nuevo! Elige tu plan de suscripción:"
+    else:
+        header = (
+            "👋 Estos son los planes disponibles, se pagan con Telegram Stars ⭐ "
+            "y se renuevan cada 30 días:"
         )
-        return
 
-    discord_id = resolve_link_code(code)
-    if not discord_id:
-        stars_bot.reply_to(
-            message,
-            "⛔ Enlace inválido o expirado. Genera uno nuevo con `!telegram` en Discord.",
-        )
-        return
-
-    _pending_links[message.from_user.id] = str(discord_id)
-    consume_link_code(code)
-    stars_bot.reply_to(
-        message,
-        "✅ Cuenta de Discord vinculada.\n\nElige tu plan de suscripción:",
-        reply_markup=_tiers_menu(),
-    )
+    stars_bot.reply_to(message, header, reply_markup=_tiers_menu())
 
 
 @stars_bot.message_handler(commands=['planes'])
 def handle_plans(message):
-    """Muestra los tiers disponibles (requiere haber vinculado antes)."""
-    if not _get_discord_id(message.from_user.id):
-        stars_bot.reply_to(
-            message,
-            "⚠️ Aún no vinculas tu cuenta de Discord. Manda `!telegram` en Discord y abre el enlace.",
-        )
-        return
+    """Muestra los tiers disponibles. El catálogo es público; vincular se pide al pagar."""
     stars_bot.reply_to(message, "Elige tu plan:", reply_markup=_tiers_menu())
 
 
@@ -105,9 +99,21 @@ def handle_buy(call):
         stars_bot.answer_callback_query(call.id, "Tier inválido.")
         return
 
+    # Sin discord_user_id no hay a quién otorgarle los roles: se exige vincular ANTES
+    # de cobrar, para no dejar a nadie pagado y sin acceso.
     discord_id = _get_discord_id(call.from_user.id)
     if not discord_id:
-        stars_bot.answer_callback_query(call.id, "Vincula tu Discord primero (!telegram).", show_alert=True)
+        stars_bot.answer_callback_query(call.id)
+        stars_bot.send_message(
+            call.message.chat.id,
+            f"🔗 Antes de cobrarte necesito saber a qué cuenta de Discord darle el rol de "
+            f"*{STAR_TIER_MAPPING[tier]['label']}*.\n\n"
+            "1️⃣ Entra a Discord y mándale `!telegram` por mensaje directo al bot.\n"
+            "2️⃣ Abre el enlace que te devuelve: te trae aquí ya vinculado.\n"
+            "3️⃣ Elige tu plan y paga.\n\n"
+            "Toma menos de un minuto y solo se hace una vez.",
+            parse_mode="Markdown",
+        )
         return
 
     try:
