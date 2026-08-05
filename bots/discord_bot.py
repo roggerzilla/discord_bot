@@ -55,19 +55,21 @@ async def on_message(message):
     # === Telegram Stars: generar deep link de vinculación ===
     if isinstance(message.channel, discord.DMChannel) and raw_content.lower().startswith("!telegram"):
         if not STARS_TELEGRAM_BOT_USERNAME:
-            await message.channel.send("⚠️ El bot de Telegram Stars aún no está configurado.")
+            await message.channel.send("⚠️ The Telegram Stars bot isn't configured yet.")
             return
         try:
             code = await asyncio.to_thread(create_link_code, str(message.author.id))
             deep_link = f"https://t.me/{STARS_TELEGRAM_BOT_USERNAME}?start={code}"
             await message.channel.send(
-                "⭐ **Suscríbete con Telegram Stars**\n\n"
-                f"Abre este enlace en Telegram para vincular tu cuenta y elegir tu plan:\n{deep_link}\n\n"
-                "_El enlace expira en 15 minutos._"
+                "⭐ **Telegram Stars subscription**\n\n"
+                f"Open this link in Telegram to connect your account:\n{deep_link}\n\n"
+                "Already paid? This is the step that gets you your roles — "
+                "they'll be assigned within a few minutes.\n\n"
+                "_This link expires in 15 minutes. Just send `!telegram` again if it does._"
             )
         except Exception as e:
             print(f"Telegram link Err: {e}")
-            await message.channel.send("❌ Error generando el enlace.")
+            await message.channel.send("❌ Something went wrong generating your link. Please try again.")
         return
 
     # ⚠️ DEPRECADO: vinculación con Stripe. Se eliminará al completar la migración a Telegram Stars.

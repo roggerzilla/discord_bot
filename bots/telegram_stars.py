@@ -14,7 +14,10 @@ El otorgamiento/quita de ROLES lo hace siempre el loop del bot de Discord
 import html
 
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 
 from config import STARS_TELEGRAM_TOKEN, STAR_TIER_MAPPING
 from services.telegram_stars_helpers import (
@@ -44,6 +47,22 @@ APPLE_WARNING = (
     "Apple's cut, not mine. Top up your Stars on <b>Telegram Desktop or Telegram Web</b> "
     "and the exact same plan gets noticeably cheaper."
 )
+
+
+# Botones del teclado persistente (los que aparecen bajo el campo de texto).
+# OJO: envían TEXTO, no comandos, así que cada handler debe reconocer ambos.
+BTN_PLANS = "⭐ Plans"
+BTN_STATUS = "📋 My subscription"
+BTN_LINK = "🔗 Link Discord"
+BTN_CANCEL = "🚫 Cancel renewal"
+
+
+def _main_keyboard() -> ReplyKeyboardMarkup:
+    """Teclado fijo bajo el campo de texto. Queda pegado hasta que se reemplace."""
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row(KeyboardButton(BTN_PLANS), KeyboardButton(BTN_STATUS))
+    kb.row(KeyboardButton(BTN_LINK), KeyboardButton(BTN_CANCEL))
+    return kb
 
 
 def _get_discord_id(telegram_user_id: int):
@@ -110,12 +129,20 @@ def handle_start(message):
     parts = message.text.split(maxsplit=1)
     code = parts[1].strip() if len(parts) > 1 else None
 
+    # El teclado persistente va en su propio mensaje: Telegram solo acepta un
+    # reply_markup por mensaje y el catálogo necesita los botones inline de compra.
+    stars_bot.send_message(
+        message.chat.id,
+        "👋 Welcome! Use the buttons below to get around.",
+        reply_markup=_main_keyboard(),
+    )
+
     if code:
         _redeem_code(message, code)
         return
 
-    stars_bot.reply_to(
-        message,
+    stars_bot.send_message(
+        message.chat.id,
         _catalog_text("⭐ <b>Choose your plan</b>"),
         reply_markup=_tiers_menu(),
         parse_mode="HTML",
@@ -157,6 +184,7 @@ def _redeem_code(message, code: str) -> None:
 
 
 @stars_bot.message_handler(commands=['plans'])
+@stars_bot.message_handler(func=lambda m: m.text == BTN_PLANS)
 def handle_plans(message):
     """Catálogo público: no exige vinculación, solo muestra qué se puede comprar."""
     stars_bot.reply_to(
@@ -168,10 +196,15 @@ def handle_plans(message):
 
 
 @stars_bot.message_handler(commands=['link'])
+@stars_bot.message_handler(func=lambda m: m.text == BTN_LINK)
 def handle_link(message):
     """/link [code]: canjea un código, o explica cómo obtenerlo."""
-    parts = message.text.split(maxsplit=1)
-    code = parts[1].strip() if len(parts) > 1 else None
+    # Solo se busca código si vino como comando: el botón del teclado manda
+    # "🔗 Link Discord", y partirlo dejaría "Link Discord" como falso código.
+    code = None
+    if message.text.startswith("/"):
+        parts = message.text.split(maxsplit=1)
+        code = parts[1].strip() if len(parts) > 1 else None
 
     if code:
         _redeem_code(message, code)
@@ -189,6 +222,7 @@ def handle_link(message):
 
 
 @stars_bot.message_handler(commands=['status'])
+@stars_bot.message_handler(func=lambda m: m.text == BTN_STATUS)
 def handle_status(message):
     """Estado de la suscripción del usuario."""
     sub = get_subscription(message.from_user.id)
@@ -313,6 +347,7 @@ def handle_successful_payment(message):
 
 
 @stars_bot.message_handler(commands=['cancel'])
+@stars_bot.message_handler(func=lambda m: m.text == BTN_CANCEL)
 def handle_cancel(message):
     """Cancela la auto-renovación. El acceso se conserva hasta la fecha de expiración."""
     if cancel_subscription(stars_bot, message.from_user.id):

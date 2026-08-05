@@ -12,7 +12,11 @@ load_dotenv()
 # ===============================
 # SAFE MODE
 # ===============================
-SAFE_MODE_NO_BAN = False
+# True = el bot SOLO otorga roles, nunca los quita.
+# Activado durante la migración de Stripe a Telegram Stars: los miembros actuales
+# pagan por Stripe y no deben perder acceso si esa fuente falla o se apaga.
+# ⚠️ Volver a False recién cuando todos estén migrados a Stars.
+SAFE_MODE_NO_BAN = True
 
 # ===============================
 # TIER MAPPING (Stripe Product ID → Discord Role ID)

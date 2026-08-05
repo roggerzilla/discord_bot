@@ -23,8 +23,9 @@ from config import (
     TIER_3_ROLE_ID,
 )
 
-# Los códigos de vinculación expiran a los 15 minutos.
-LINK_CODE_TTL_MINUTES = 15
+# Los códigos de vinculación expiran a la hora. Con el flujo pago-primero el usuario
+# llega a vincular DESPUÉS de pagar, y 15 minutos resultaban demasiado justos.
+LINK_CODE_TTL_MINUTES = 60
 
 
 def _now_iso() -> str:
@@ -36,7 +37,11 @@ def _now_iso() -> str:
 # ===============================
 def create_link_code(discord_user_id: str) -> str:
     """Genera un código de un solo uso que vincula a un usuario de Discord.
-    Se guarda en Supabase y luego se resuelve cuando el usuario abre el bot de Telegram."""
+    Se guarda en Supabase y luego se resuelve cuando el usuario abre el bot de Telegram.
+
+    Propaga la excepción a propósito: si el código no llegó a la BD, el deep link que
+    arma Discord está muerto desde el inicio y el usuario recibiría un "invalid or
+    expired" imposible de resolver. Es preferible fallar aquí y decirlo."""
     code = secrets.token_urlsafe(8)
     try:
         supabase.table(TELEGRAM_LINK_CODES_TABLE).upsert({
@@ -45,7 +50,8 @@ def create_link_code(discord_user_id: str) -> str:
             "created_at": _now_iso(),
         }).execute()
     except Exception as e:
-        print(f"⚠️ Error creando link code: {e}")
+        print(f"⚠️ Error creando link code (tabla '{TELEGRAM_LINK_CODES_TABLE}'): {e}")
+        raise
     return code
 
 
@@ -56,14 +62,18 @@ def resolve_link_code(code: str):
     try:
         res = supabase.table(TELEGRAM_LINK_CODES_TABLE).select("*").eq("code", code).limit(1).execute()
         if not res.data:
+            # Distinguir esto de "expirado" importa: si NUNCA se guardó, el problema
+            # está del lado de Discord/Supabase, no en que el usuario tardó.
+            print(f"⚠️ Link code no encontrado en la BD: {code!r}")
             return None
         row = res.data[0]
         created = row.get("created_at")
         if created:
             try:
                 created_dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
-                if datetime.now(timezone.utc) - created_dt > timedelta(minutes=LINK_CODE_TTL_MINUTES):
-                    # Expirado: limpiar y rechazar.
+                edad = datetime.now(timezone.utc) - created_dt
+                if edad > timedelta(minutes=LINK_CODE_TTL_MINUTES):
+                    print(f"⏳ Link code expirado ({int(edad.total_seconds() / 60)} min de antigüedad)")
                     supabase.table(TELEGRAM_LINK_CODES_TABLE).delete().eq("code", code).execute()
                     return None
             except Exception:
