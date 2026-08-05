@@ -8,6 +8,13 @@ import time
 import signal
 import threading
 
+# En Render stdout no es una terminal, así que Python lo bufferea por bloques y los
+# print() quedan retenidos varios KB antes de aparecer (los logs de `logging` salen
+# por stderr y sí se ven al instante, lo que hacía parecer que el código no corría).
+# Debe ir ANTES de importar los bots: sus módulos imprimen al cargarse.
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 import uvicorn
 
 # Importar los bots (los handlers se registran al importar)
