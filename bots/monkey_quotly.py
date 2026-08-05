@@ -180,6 +180,16 @@ def pack_detail_keyboard(idx):
     return kb
 
 
+def _private_markup(message, markup):
+    """Adjunta teclados únicamente en chats privados."""
+    return {"reply_markup": markup} if message.chat.type == "private" else {}
+
+
+def _private_reply_keyboard(message):
+    """Muestra el teclado persistente solo en privado y lo quita en grupos."""
+    return quick_keyboard() if message.chat.type == "private" else types.ReplyKeyboardRemove()
+
+
 def fmt_label(f):
     return {"static": "estático", "animated": "animado", "video": "video"}.get(f, f)
 
@@ -246,7 +256,8 @@ def _custom_title(chat_id, user_id, chat_type):
 # =====================================================================
 @bot.message_handler(commands=["start", "help"])
 def handle_start(message):
-    bot.send_message(message.chat.id, HELP_TEXT, parse_mode="Markdown", reply_markup=quick_keyboard())
+    bot.send_message(message.chat.id, HELP_TEXT, parse_mode="Markdown",
+                     reply_markup=_private_reply_keyboard(message))
 
 
 # =====================================================================
@@ -313,7 +324,8 @@ def handle_mq(message):
     key = secrets.token_urlsafe(6)
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Guardar en mis stickers ❤️", callback_data=f"save:{key}"))
-    sent = bot.send_sticker(message.chat.id, types.InputFile(BytesIO(webp), "quote.webp"), reply_markup=kb)
+    sent = bot.send_sticker(message.chat.id, types.InputFile(BytesIO(webp), "quote.webp"),
+                            **_private_markup(message, kb))
     _sticker_store[key] = {"file_id": sent.sticker.file_id, "ts": time.time()}
     _gc_sticker_store()
 
@@ -869,7 +881,8 @@ def kb_mypacks(message):
 
 @bot.message_handler(func=lambda m: m.text == "❓ Ayuda")
 def kb_help(message):
-    bot.send_message(message.chat.id, HELP_TEXT, parse_mode="Markdown", reply_markup=quick_keyboard())
+    bot.send_message(message.chat.id, HELP_TEXT, parse_mode="Markdown",
+                     reply_markup=_private_reply_keyboard(message))
 
 
 @bot.message_handler(content_types=["text", "photo", "video", "animation", "sticker", "document", "video_note"])
