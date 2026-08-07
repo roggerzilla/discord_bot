@@ -43,42 +43,43 @@ STAR_TIER_MAPPING = {
     "tier1": {
         "label": "Tier 1",
         "emoji": "🥉",
-        "stars": 400,      # ~$5 USD netos
+        "stars": 385,      # ~$5.01 USD netos
         "usd": 5,
         "roles": [1459004030381592606],
-        # ⚠️ PLACEHOLDER: reemplaza estos beneficios por los reales.
         "perks": [
-            "Access to the members-only channel",
-            "Exclusive weekly drops",
+            "1 edit every 2 weeks",
+            "3 NDE dance videos per week",
+            "10 random videos per month",
             "Tier 1 role on Discord",
         ],
     },
     "tier2": {
         "label": "Tier 2",
         "emoji": "🥈",
-        "stars": 800,      # ~$10 USD netos
+        "stars": 770,      # ~$10.01 USD netos
         "usd": 10,
         "roles": [1459004119711879372],
-        # ⚠️ PLACEHOLDER: reemplaza estos beneficios por los reales.
         "perks": [
-            "Everything in Tier 1",
-            "Full back catalog, no limits",
-            "Priority requests",
+            "1 edit per week",
+            "6 NDE dance videos per week",
+            "15 random videos per month",
+            "1 request per month",
             "Tier 2 role on Discord",
         ],
     },
     "tier3": {
         "label": "Tier 3",
         "emoji": "👑",
-        "stars": 1200,     # ~$15 USD netos
+        "stars": 1155,     # ~$15.02 USD netos
         "usd": 15,
         # Tier 3 incluye también el rol por defecto (paridad con la lógica de Stripe)
         "roles": [1459004146970787861],
-        # ⚠️ PLACEHOLDER: reemplaza estos beneficios por los reales.
         "perks": [
-            "Everything in Tier 2",
-            "Early access before anyone else",
-            "Direct line to me",
+            "2 PMV videos per month",
+            "8 NDE dance videos per week",
+            "20 random videos per month",
+            "2 requests per month",
+            "Vote in polls to decide what content comes next",
             "Tier 3 role on Discord",
         ],
     },
