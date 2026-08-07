@@ -19,7 +19,10 @@ from telebot.types import (
     ReplyKeyboardMarkup, KeyboardButton,
 )
 
-from config import STARS_TELEGRAM_TOKEN, STAR_TIER_MAPPING
+from config import (
+    STARS_TELEGRAM_TOKEN, STAR_TIER_MAPPING,
+    DISCORD_INVITE_URL, DISCORD_BOT_INSTALL_URL,
+)
 from services.telegram_stars_helpers import (
     resolve_link_code,
     consume_link_code,
@@ -53,7 +56,7 @@ APPLE_WARNING = (
 # OJO: envían TEXTO, no comandos, así que cada handler debe reconocer ambos.
 BTN_PLANS = "⭐ Plans"
 BTN_STATUS = "📋 My subscription"
-BTN_LINK = "🔗 Link Discord"
+BTN_LINK = "🔗 Get access"
 BTN_CANCEL = "🚫 Cancel renewal"
 
 
@@ -112,18 +115,28 @@ def _catalog_text(header: str) -> str:
 
 # Instrucciones de vinculación: se reutilizan tras el pago y desde /link.
 LINK_INSTRUCTIONS = (
-    "🔗 <b>Link your Discord account</b>\n\n"
-    "This is how your roles get assigned:\n\n"
-    "1️⃣ Open Discord and send <code>!telegram</code> as a direct message to the bot.\n"
-    "2️⃣ It replies with a link — tap it and it brings you back here, already linked.\n\n"
-    "That's it. Your roles show up within a few minutes.\n\n"
-    "<i>The link expires after 15 minutes — just send !telegram again if it does.</i>"
+    "🔗 <b>Get your access</b>\n\n"
+    "1️⃣ Join the Discord server with the button below.\n"
+    "2️⃣ Send <code>!telegram</code> as a direct message to the bot there.\n"
+    "3️⃣ Tap the link it gives you — it brings you back here and unlocks your roles.\n\n"
+    "Your roles show up within a few minutes.\n\n"
+    "<i>The link is valid for 1 hour — just send !telegram again if it expires.</i>"
 )
 
 
 def _link_button() -> InlineKeyboardMarkup:
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("🔗 How do I link my Discord?", callback_data="howtolink"))
+    """Botones para llegar al servidor sin tener que buscarlo."""
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("💬 Join the Discord server", url=DISCORD_INVITE_URL))
+    markup.add(InlineKeyboardButton("🔗 How does linking work?", callback_data="howtolink"))
+    return markup
+
+
+def _server_button() -> InlineKeyboardMarkup:
+    """Solo el acceso al servidor: para acompañar a las instrucciones ya desplegadas."""
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(InlineKeyboardButton("💬 Join the Discord server", url=DISCORD_INVITE_URL))
+    markup.add(InlineKeyboardButton("➕ Add the bot to your own server", url=DISCORD_BOT_INSTALL_URL))
     return markup
 
 
@@ -205,7 +218,7 @@ def handle_plans(message):
 def handle_link(message):
     """/link [code]: canjea un código, o explica cómo obtenerlo."""
     # Solo se busca código si vino como comando: el botón del teclado manda
-    # "🔗 Link Discord", y partirlo dejaría "Link Discord" como falso código.
+    # "🔗 Get access", y partirlo dejaría "Get access" como falso código.
     code = None
     if message.text.startswith("/"):
         parts = message.text.split(maxsplit=1)
@@ -218,12 +231,15 @@ def handle_link(message):
     if _get_discord_id(message.from_user.id):
         stars_bot.reply_to(
             message,
-            "✅ Your Discord account is already linked. Nothing else to do.",
+            "✅ Your account is already linked. Nothing else to do.",
             parse_mode="HTML",
         )
         return
 
-    stars_bot.reply_to(message, LINK_INSTRUCTIONS, parse_mode="HTML")
+    stars_bot.reply_to(
+        message, LINK_INSTRUCTIONS,
+        reply_markup=_server_button(), parse_mode="HTML",
+    )
 
 
 @stars_bot.message_handler(commands=['status'])
@@ -265,7 +281,10 @@ def handle_status(message):
 @stars_bot.callback_query_handler(func=lambda c: c.data == "howtolink")
 def handle_howtolink(call):
     stars_bot.answer_callback_query(call.id)
-    stars_bot.send_message(call.message.chat.id, LINK_INSTRUCTIONS, parse_mode="HTML")
+    stars_bot.send_message(
+        call.message.chat.id, LINK_INSTRUCTIONS,
+        reply_markup=_server_button(), parse_mode="HTML",
+    )
 
 
 @stars_bot.callback_query_handler(func=lambda c: c.data.startswith("buy:"))
@@ -374,7 +393,7 @@ def handle_unknown(message):
     print(f"⭐ Mensaje sin handler de tg={message.from_user.id}: {message.text!r}")
     stars_bot.reply_to(
         message,
-        "I didn't catch that. Use /plans to see the subscriptions, /link to connect "
-        "your Discord, /status to check your subscription, or /cancel to stop renewals.",
+        "I didn't catch that. Use /plans to see the subscriptions, /link to get your "
+        "access, /status to check your subscription, or /cancel to stop renewals.",
         reply_markup=_tiers_menu(),
     )

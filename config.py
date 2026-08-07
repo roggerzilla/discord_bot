@@ -50,7 +50,6 @@ STAR_TIER_MAPPING = {
             "1 edit every 2 weeks",
             "3 NDE dance videos per week",
             "10 random videos per month",
-            "Tier 1 role on Discord",
         ],
     },
     "tier2": {
@@ -64,7 +63,6 @@ STAR_TIER_MAPPING = {
             "6 NDE dance videos per week",
             "15 random videos per month",
             "1 request per month",
-            "Tier 2 role on Discord",
         ],
     },
     "tier3": {
@@ -81,7 +79,6 @@ STAR_TIER_MAPPING = {
             "20 random videos per month",
             "2 requests per month",
             "Vote in polls to decide what content comes next",
-            "Tier 3 role on Discord",
         ],
     },
 }
@@ -99,6 +96,16 @@ ADMIN_LOG_CHANNEL_ID = int(os.environ.get("ADMIN_LOG_CHANNEL_ID", "0"))
 MANAGED_ROLES = list(TIER_MAPPING.values())
 if DEFAULT_ROLE_ID:
     MANAGED_ROLES.append(DEFAULT_ROLE_ID)
+
+# Links que el bot de Stars le muestra al usuario DESPUÉS de pagar, para que pueda
+# llegar al servidor y vincular su cuenta sin buscar nada por su cuenta.
+DISCORD_INVITE_URL = os.environ.get("DISCORD_INVITE_URL", "https://discord.gg/uqpUXfEq62")
+# Link de instalación del bot (OAuth). Sirve para AÑADIR el bot a un servidor propio,
+# no para que un suscriptor lo contacte: se muestra aparte y bien etiquetado.
+DISCORD_BOT_INSTALL_URL = os.environ.get(
+    "DISCORD_BOT_INSTALL_URL",
+    "https://discord.com/oauth2/authorize?client_id=1390871957041578175",
+)
 
 # ===============================
 # SUPABASE
