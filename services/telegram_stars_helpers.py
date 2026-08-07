@@ -138,12 +138,20 @@ def create_subscription_invoice_link(bot, tier: str) -> str:
     conf = STAR_TIER_MAPPING[tier]
     prices = [LabeledPrice(label=conf["label"], amount=conf["stars"])]
 
-    # Telegram corta la descripción en 255 caracteres: metemos los perks y recortamos.
+    # Telegram corta la descripción en 255 caracteres. Los beneficios son lo que vende,
+    # así que el aviso de renovación se omite si no cabe (igual va en el catálogo y en
+    # la propia pantalla de pago de Telegram, que marca las suscripciones como tales).
+    LIMITE = 255
+    SUFIJO = " • Renews monthly, cancel anytime."
     perks = " • ".join(conf.get("perks", []))
-    description = f"{perks} • Renews every 30 days, cancel anytime." if perks else \
-        "Monthly subscription, renews every 30 days. Cancel anytime."
-    if len(description) > 255:
-        description = description[:252] + "..."
+    if not perks:
+        description = "Monthly subscription, renews every 30 days. Cancel anytime."
+    elif len(perks) + len(SUFIJO) <= LIMITE:
+        description = perks + SUFIJO
+    else:
+        description = perks
+    if len(description) > LIMITE:
+        description = description[:LIMITE - 3] + "..."
 
     return bot.create_invoice_link(
         title=f"{conf['label']} — monthly",
