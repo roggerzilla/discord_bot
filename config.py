@@ -76,7 +76,7 @@ STAR_TIER_MAPPING = {
         "roles": [1459004146970787861],
         "perks": [
             "2 PMV videos per month",
-            "8 NDE dance videos per week",
+            "8 NDE dance videos per week — all with sound 🔊",
             "20 random videos per month",
             "2 requests per month",
             "Vote in polls to decide what content comes next",

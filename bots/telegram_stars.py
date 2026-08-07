@@ -86,11 +86,16 @@ def _tiers_menu() -> InlineKeyboardMarkup:
     return markup
 
 
+# Diferenciador principal del tier más caro: va arriba del todo, antes de los planes,
+# para que se lea aunque el usuario no baje a comparar tier por tier.
+PREMIUM_HIGHLIGHT = "🔊 <b>Only in Tier 3: every NDE dance video comes with sound.</b>"
+
+
 def _catalog_text(header: str) -> str:
     """Arma el catálogo con los beneficios de cada tier.
     Usa HTML porque los perks los edita el dueño del bot a mano y un '_' o un '*'
     suelto rompería el parseo con Markdown."""
-    blocks = [header, ""]
+    blocks = [header, "", PREMIUM_HIGHLIGHT, ""]
     for conf in STAR_TIER_MAPPING.values():
         blocks.append(
             f"{conf.get('emoji', '⭐')} <b>{html.escape(conf['label'])}</b> — "
