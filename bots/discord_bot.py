@@ -198,24 +198,32 @@ async def check_subscriptions():
         return
     try:
         # --- Fuente 1: Stripe (⚠️ DEPRECADO, se eliminará) ---
-        response = supabase.table(TABLE_NAME).select("*").neq("discord_user_id", "None").execute()
-        # discord_user_id -> roles que Stripe le da (set)
+        # Va en su propio try: un fallo aquí NO debe impedir que se repartan los roles
+        # de Telegram Stars. Antes compartían try y cualquier excepción de Stripe
+        # abortaba el loop entero antes de llegar a las Stars.
         stripe_roles_map = {}
-        for row in response.data:
-            c_id = row.get("stripe_customer_id")
-            d_id = row.get("discord_user_id")
-            current_db_status = row.get("subscription_status")
-            real_status, prod_obj = await get_customer_subscription_data(c_id)
-            if real_status is None:
-                continue
-            if real_status != current_db_status:
-                supabase.table(TABLE_NAME).update({
-                    "subscription_status": real_status,
-                    "updated_at": discord.utils.utcnow().isoformat()
-                }).eq("stripe_customer_id", c_id).execute()
-            if real_status in ACTIVE_STATUSES:
-                stripe_roles_map.setdefault(d_id, set()).update(calculate_roles_to_assign(prod_obj))
-            await asyncio.sleep(0.5)
+        stripe_seen_ids = set()
+        try:
+            response = supabase.table(TABLE_NAME).select("*").neq("discord_user_id", "None").execute()
+            stripe_seen_ids = {r.get("discord_user_id") for r in response.data if r.get("discord_user_id")}
+            for row in response.data:
+                c_id = row.get("stripe_customer_id")
+                d_id = row.get("discord_user_id")
+                current_db_status = row.get("subscription_status")
+                real_status, prod_obj = await get_customer_subscription_data(c_id)
+                if real_status is None:
+                    continue
+                if real_status != current_db_status:
+                    supabase.table(TABLE_NAME).update({
+                        "subscription_status": real_status,
+                        "updated_at": discord.utils.utcnow().isoformat()
+                    }).eq("stripe_customer_id", c_id).execute()
+                if real_status in ACTIVE_STATUSES:
+                    stripe_roles_map.setdefault(d_id, set()).update(calculate_roles_to_assign(prod_obj))
+                await asyncio.sleep(0.5)
+        except Exception as e:
+            print(f"⚠️ Fuente Stripe falló (se continúa con Telegram Stars): {e}")
+            STATUS["last_check_error"] = f"Stripe: {type(e).__name__}: {e}"
 
         # --- Fuente 2: Telegram Stars (nuevo sistema) ---
         await asyncio.to_thread(mark_expired_subs)
@@ -230,8 +238,9 @@ async def check_subscriptions():
         STATUS["stars_subs_linked"] = len(stars_roles_map)
 
         # --- Unificar: todo Discord ID visto en cualquiera de las dos fuentes ---
+        # stripe_seen_ids queda vacío si la fuente Stripe falló, y las Stars siguen igual.
         all_ids = set(stripe_roles_map.keys()) | set(stars_roles_map.keys()) | star_all_ids
-        all_ids |= {row.get("discord_user_id") for row in response.data if row.get("discord_user_id")}
+        all_ids |= stripe_seen_ids
 
         for d_id in all_ids:
             if not d_id:

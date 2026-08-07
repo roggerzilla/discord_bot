@@ -32,9 +32,32 @@ async def get_customer_subscription_data(customer_id: str):
     return await asyncio.to_thread(_blocking_stripe_call)
 
 
+def _extract_product_id(product_obj):
+    """Saca el ID de un producto de Stripe venga como venga.
+
+    En stripe>=8 los objetos ya no heredan de dict, así que el `isinstance(_, dict)`
+    original devolvía False y se usaba el objeto entero como clave del mapping, lo que
+    reventaba con 'TypeError: unhashable type: Product'.
+    """
+    if product_obj is None:
+        return None
+    if isinstance(product_obj, str):
+        return product_obj
+    pid = getattr(product_obj, "id", None)
+    if isinstance(pid, str):
+        return pid
+    if hasattr(product_obj, "get"):
+        try:
+            value = product_obj.get("id")
+            return value if isinstance(value, str) else None
+        except Exception:
+            return None
+    return None
+
+
 def calculate_roles_to_assign(product_obj):
     """Calcula qué roles de Discord asignar basado en el producto de Stripe."""
-    product_id = product_obj.get('id') if isinstance(product_obj, dict) else product_obj
+    product_id = _extract_product_id(product_obj)
     roles_to_give = []
     tier_role = TIER_MAPPING.get(product_id)
     if tier_role:
