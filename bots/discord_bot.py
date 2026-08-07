@@ -28,21 +28,55 @@ intents = discord.Intents.default()
 intents.members = True
 intents.messages = True
 intents.message_content = True
-discord_client = discord.Client(intents=intents)
+# chunk_guilds_at_startup=False: con members intent, discord.py descarga TODA la lista
+# de miembros antes de disparar on_ready. En servidores grandes eso tarda o se cuelga, y
+# como el loop de roles arranca en on_ready, se quedaba sin arrancar nunca (los DMs
+# seguían funcionando porque on_message no depende de on_ready, lo que lo hacía difícil
+# de detectar). Sin chunking la caché de miembros queda vacía: por eso _get_member()
+# cae a fetch_member() cuando get_member() no encuentra a alguien.
+discord_client = discord.Client(intents=intents, chunk_guilds_at_startup=False)
 
 guild = None
 admin_log_channel = None
 
 
+async def _get_member(g, user_id: int):
+    """Busca un miembro en la caché y, si no está, lo pide a la API.
+    Devuelve None si ya no pertenece al servidor."""
+    member = g.get_member(user_id)
+    if member is not None:
+        return member
+    try:
+        return await g.fetch_member(user_id)
+    except discord.NotFound:
+        return None
+    except discord.HTTPException as e:
+        print(f"⚠️ Error buscando al miembro {user_id}: {e}")
+        return None
+
+
+def _resolve_guild():
+    """Resuelve el guild y el canal de logs. Se reintenta desde el loop para no
+    depender de que on_ready haya corrido con la caché ya poblada."""
+    global guild, admin_log_channel
+    if guild is None:
+        guild = discord_client.get_guild(DISCORD_GUILD_ID)
+        if guild is None:
+            print(f"⚠️ No encuentro el guild {DISCORD_GUILD_ID}. ¿Es correcto DISCORD_GUILD_ID?")
+            return None
+        print(f"✅ Guild encontrado: {guild.name}")
+    if admin_log_channel is None and ADMIN_LOG_CHANNEL_ID:
+        admin_log_channel = discord_client.get_channel(ADMIN_LOG_CHANNEL_ID)
+    return guild
+
+
 @discord_client.event
 async def on_ready():
-    global guild, admin_log_channel
     print(f"✅ Discord Ready. SafeMode: {SAFE_MODE_NO_BAN}")
-    guild = discord_client.get_guild(DISCORD_GUILD_ID)
-    if guild:
-        admin_log_channel = discord_client.get_channel(ADMIN_LOG_CHANNEL_ID)
+    _resolve_guild()
     if not check_subscriptions.is_running():
         check_subscriptions.start()
+        print("🔁 Loop de suscripciones iniciado")
 
 
 @discord_client.event
@@ -135,7 +169,7 @@ async def on_message(message):
 @tasks.loop(minutes=10)
 async def check_subscriptions():
     print("🔄 Checking subscriptions...")
-    if not guild:
+    if _resolve_guild() is None:
         return
     try:
         # --- Fuente 1: Stripe (⚠️ DEPRECADO, se eliminará) ---
@@ -167,6 +201,7 @@ async def check_subscriptions():
         for sub in star_active:
             d_id = str(sub.get("discord_user_id"))
             stars_roles_map.setdefault(d_id, set()).update(roles_for_tier(sub.get("tier")))
+        print(f"⭐ Suscripciones Stars vigentes y vinculadas: {len(stars_roles_map)}")
 
         # --- Unificar: todo Discord ID visto en cualquiera de las dos fuentes ---
         all_ids = set(stripe_roles_map.keys()) | set(stars_roles_map.keys()) | star_all_ids
@@ -176,10 +211,14 @@ async def check_subscriptions():
             if not d_id:
                 continue
             try:
-                member = guild.get_member(int(d_id))
+                member = await _get_member(guild, int(d_id))
             except (TypeError, ValueError):
                 continue
             if not member:
+                # Pagó y vinculó, pero no está en el servidor: sin esto el caso era
+                # indistinguible de "todo bien" en los logs.
+                if d_id in stars_roles_map:
+                    print(f"⚠️ {d_id} tiene suscripción activa pero no está en el servidor")
                 continue
 
             # Roles a los que el usuario TIENE derecho (unión de ambas fuentes).
@@ -188,9 +227,19 @@ async def check_subscriptions():
             # Otorgar los que le falten.
             for rid in entitled:
                 r = guild.get_role(rid)
-                if r and r not in member.roles:
-                    await member.add_roles(r, reason="Suscripción activa")
-                    print(f"➕ Rol {r.name} a {member.display_name}")
+                if r is None:
+                    # Un role ID que no existe en el servidor fallaba en silencio.
+                    print(f"⚠️ El rol {rid} no existe en el servidor. Revisa config.py")
+                    continue
+                if r not in member.roles:
+                    try:
+                        await member.add_roles(r, reason="Suscripción activa")
+                        print(f"➕ Rol {r.name} a {member.display_name}")
+                    except discord.Forbidden:
+                        print(f"⛔ Sin permisos para dar '{r.name}'. "
+                              "El rol del bot debe estar POR ENCIMA en la lista de roles.")
+                    except discord.HTTPException as e:
+                        print(f"⚠️ Error dando el rol '{r.name}' a {member.display_name}: {e}")
 
             # Quitar roles gestionados a los que YA NO tiene derecho (baja o downgrade).
             if not SAFE_MODE_NO_BAN:
