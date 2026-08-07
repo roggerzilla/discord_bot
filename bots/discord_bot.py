@@ -39,6 +39,22 @@ discord_client = discord.Client(intents=intents, chunk_guilds_at_startup=False)
 guild = None
 admin_log_channel = None
 
+# Estado en vivo del bot, expuesto en /debug/status. Los logs de Render son difíciles
+# de seguir (varios bots escribiendo a la vez), así que el diagnóstico se consulta por
+# HTTP. Solo conteos y banderas: nada de IDs ni datos de usuarios.
+STATUS = {
+    "discord_ready": False,
+    "guild_name": None,
+    "guild_found": False,
+    "loop_running": False,
+    "last_check": None,
+    "last_check_error": None,
+    "stars_subs_linked": 0,
+    "roles_granted_last_run": 0,
+    "members_missing_last_run": 0,
+    "safe_mode_no_ban": SAFE_MODE_NO_BAN,
+}
+
 
 async def _get_member(g, user_id: int):
     """Busca un miembro en la caché y, si no está, lo pide a la API.
@@ -63,8 +79,11 @@ def _resolve_guild():
         guild = discord_client.get_guild(DISCORD_GUILD_ID)
         if guild is None:
             print(f"⚠️ No encuentro el guild {DISCORD_GUILD_ID}. ¿Es correcto DISCORD_GUILD_ID?")
+            STATUS["guild_found"] = False
             return None
         print(f"✅ Guild encontrado: {guild.name}")
+        STATUS["guild_found"] = True
+        STATUS["guild_name"] = guild.name
     if admin_log_channel is None and ADMIN_LOG_CHANNEL_ID:
         admin_log_channel = discord_client.get_channel(ADMIN_LOG_CHANNEL_ID)
     return guild
@@ -73,9 +92,11 @@ def _resolve_guild():
 @discord_client.event
 async def on_ready():
     print(f"✅ Discord Ready. SafeMode: {SAFE_MODE_NO_BAN}")
+    STATUS["discord_ready"] = True
     _resolve_guild()
     if not check_subscriptions.is_running():
         check_subscriptions.start()
+        STATUS["loop_running"] = True
         print("🔁 Loop de suscripciones iniciado")
 
 
@@ -169,7 +190,11 @@ async def on_message(message):
 @tasks.loop(minutes=10)
 async def check_subscriptions():
     print("🔄 Checking subscriptions...")
+    STATUS["last_check"] = discord.utils.utcnow().isoformat()
+    STATUS["roles_granted_last_run"] = 0
+    STATUS["members_missing_last_run"] = 0
     if _resolve_guild() is None:
+        STATUS["last_check_error"] = f"Guild {DISCORD_GUILD_ID} no encontrado"
         return
     try:
         # --- Fuente 1: Stripe (⚠️ DEPRECADO, se eliminará) ---
@@ -202,6 +227,7 @@ async def check_subscriptions():
             d_id = str(sub.get("discord_user_id"))
             stars_roles_map.setdefault(d_id, set()).update(roles_for_tier(sub.get("tier")))
         print(f"⭐ Suscripciones Stars vigentes y vinculadas: {len(stars_roles_map)}")
+        STATUS["stars_subs_linked"] = len(stars_roles_map)
 
         # --- Unificar: todo Discord ID visto en cualquiera de las dos fuentes ---
         all_ids = set(stripe_roles_map.keys()) | set(stars_roles_map.keys()) | star_all_ids
@@ -219,6 +245,7 @@ async def check_subscriptions():
                 # indistinguible de "todo bien" en los logs.
                 if d_id in stars_roles_map:
                     print(f"⚠️ {d_id} tiene suscripción activa pero no está en el servidor")
+                    STATUS["members_missing_last_run"] += 1
                 continue
 
             # Roles a los que el usuario TIENE derecho (unión de ambas fuentes).
@@ -235,9 +262,14 @@ async def check_subscriptions():
                     try:
                         await member.add_roles(r, reason="Suscripción activa")
                         print(f"➕ Rol {r.name} a {member.display_name}")
+                        STATUS["roles_granted_last_run"] += 1
                     except discord.Forbidden:
                         print(f"⛔ Sin permisos para dar '{r.name}'. "
                               "El rol del bot debe estar POR ENCIMA en la lista de roles.")
+                        STATUS["last_check_error"] = (
+                            f"Sin permisos para asignar '{r.name}': el rol del bot debe "
+                            "estar por encima en la jerarquía del servidor"
+                        )
                     except discord.HTTPException as e:
                         print(f"⚠️ Error dando el rol '{r.name}' a {member.display_name}: {e}")
 
@@ -256,3 +288,6 @@ async def check_subscriptions():
             await asyncio.sleep(0.1)
     except Exception as e:
         print(f"Error Loop: {e}")
+        STATUS["last_check_error"] = f"{type(e).__name__}: {e}"
+    else:
+        STATUS["last_check_error"] = None
