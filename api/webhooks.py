@@ -1,6 +1,10 @@
 """
 webhooks.py - FastAPI app y endpoints.
 """
+import os
+import time
+import uuid
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import stripe
@@ -8,6 +12,12 @@ import stripe
 from config import STRIPE_WEBHOOK_SECRET
 
 app = FastAPI()
+
+# Identificador único de ESTE proceso. Si al recargar /debug/status cambia, hay más de
+# una instancia corriendo: eso provoca el 409 permanente de Telegram (dos procesos
+# peleando por getUpdates) y respuestas incoherentes según a cuál responda el balanceador.
+INSTANCE_ID = f"pid{os.getpid()}-{uuid.uuid4().hex[:6]}"
+STARTED_AT = time.time()
 
 
 @app.get("/")
@@ -43,7 +53,16 @@ async def debug_status():
     if not diagnostico:
         diagnostico.append("Todo en orden.")
 
-    return {**STATUS, "diagnostico": diagnostico}
+    return {
+        **STATUS,
+        "instance_id": INSTANCE_ID,
+        "uptime_seconds": int(time.time() - STARTED_AT),
+        "pista_instancias": (
+            "Recarga esta página varias veces: si instance_id CAMBIA, hay más de un "
+            "proceso corriendo y esa es la causa del error 409 de Telegram."
+        ),
+        "diagnostico": diagnostico,
+    }
 
 
 # ⚠️ DEPRECADO: webhook de Stripe. Se eliminará al completar la migración a Telegram Stars.
