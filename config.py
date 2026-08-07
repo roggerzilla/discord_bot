@@ -60,7 +60,7 @@ STAR_TIER_MAPPING = {
         "usd": 10,
         "roles": [1459004119711879372],
         "perks": [
-            "1 edit per week",
+            "3 edits per month",
             "6 NDE dance videos per week",
             "15 random videos per month",
             "1 request per month",
@@ -75,7 +75,7 @@ STAR_TIER_MAPPING = {
         # Tier 3 incluye también el rol por defecto (paridad con la lógica de Stripe)
         "roles": [1459004146970787861],
         "perks": [
-            "2 edits per month",
+            "4 edits per month",
             "2 PMV videos per month",
             "8 NDE dance videos per week — all with sound 🔊",
             "20 random videos per month",
