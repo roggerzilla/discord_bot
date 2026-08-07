@@ -9,7 +9,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import stripe
 
-from config import STRIPE_WEBHOOK_SECRET
+from config import (
+    STRIPE_WEBHOOK_SECRET,
+    TELEGRAM_TOKEN, MONKEY_TELEGRAM_TOKEN,
+    STARS_TELEGRAM_TOKEN, MONKEY_QUOTLY_TOKEN,
+)
 
 app = FastAPI()
 
@@ -18,6 +22,43 @@ app = FastAPI()
 # peleando por getUpdates) y respuestas incoherentes según a cuál responda el balanceador.
 INSTANCE_ID = f"pid{os.getpid()}-{uuid.uuid4().hex[:6]}"
 STARTED_AT = time.time()
+
+
+def _tokens_duplicados():
+    """Detecta si dos bots comparten token, que provoca un 409 permanente sin que
+    exista una segunda instancia: dos hilos del mismo proceso hacen polling al mismo
+    bot y Telegram corta a uno. Devuelve solo NOMBRES de variables, nunca los tokens."""
+    tokens = {
+        "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
+        "MONKEY_TELEGRAM_TOKEN": MONKEY_TELEGRAM_TOKEN,
+        "STARS_TELEGRAM_TOKEN": STARS_TELEGRAM_TOKEN,
+        "MONKEY_QUOTLY_TOKEN": MONKEY_QUOTLY_TOKEN,
+    }
+    por_valor = {}
+    for nombre, valor in tokens.items():
+        if not valor or valor == "TOKEN":
+            continue
+        por_valor.setdefault(valor, []).append(nombre)
+    return [nombres for nombres in por_valor.values() if len(nombres) > 1]
+
+
+def _bot_ids():
+    """Prefijo numérico de cada token (el bot_id, que es público: aparece en cada
+    mensaje del bot). Sirve para ver de un vistazo si dos apuntan al mismo bot.
+    Nunca incluye la parte secreta del token."""
+    tokens = {
+        "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
+        "MONKEY_TELEGRAM_TOKEN": MONKEY_TELEGRAM_TOKEN,
+        "STARS_TELEGRAM_TOKEN": STARS_TELEGRAM_TOKEN,
+        "MONKEY_QUOTLY_TOKEN": MONKEY_QUOTLY_TOKEN,
+    }
+    salida = {}
+    for nombre, valor in tokens.items():
+        if not valor or ":" not in valor:
+            salida[nombre] = "(sin configurar)"
+        else:
+            salida[nombre] = valor.split(":", 1)[0]
+    return salida
 
 
 @app.get("/")
@@ -50,6 +91,13 @@ async def debug_status():
         )
     if STATUS["last_check_error"]:
         diagnostico.append(f"Último error: {STATUS['last_check_error']}")
+    duplicados = _tokens_duplicados()
+    for grupo in duplicados:
+        diagnostico.append(
+            "⚠️ CAUSA DEL ERROR 409: estas variables tienen el MISMO token y por eso "
+            f"pelean por los mensajes del mismo bot: {' y '.join(grupo)}."
+        )
+
     if not diagnostico:
         diagnostico.append("Todo en orden.")
 
@@ -57,6 +105,8 @@ async def debug_status():
         **STATUS,
         "instance_id": INSTANCE_ID,
         "uptime_seconds": int(time.time() - STARTED_AT),
+        "bot_ids": _bot_ids(),
+        "tokens_duplicados": duplicados,
         "pista_instancias": (
             "Recarga esta página varias veces: si instance_id CAMBIA, hay más de un "
             "proceso corriendo y esa es la causa del error 409 de Telegram."
